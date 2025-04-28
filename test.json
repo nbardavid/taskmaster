@@ -1,0 +1,12 @@
+{
+    "programs": [
+        {
+            "name": "bash",
+            "cmd": "/bin/bash"
+        },
+        {
+            "name": "42i",
+            "cmd": "echo Je suis Warren"
+        }
+    ]
+}
