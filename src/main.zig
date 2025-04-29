@@ -4,6 +4,7 @@ const stdout = std.io.getStdOut();
 const c = @cImport({
     @cInclude("readline/readline.h");
     @cInclude("sys/wait.h");
+    @cInclude("unistd.h");
 });
 
 const ConfigParser = @import("config.zig");
@@ -29,15 +30,29 @@ fn sliceFromCstr(str: [*c]u8) []u8 {
 fn start(alloc: std.mem.Allocator, program: ConfigParser.Program) !void {
     var it_cmd = std.mem.tokenizeScalar(u8, program.cmd, ' ');
 
-    var cmd = std.ArrayList([]const u8).init(alloc);
-    defer cmd.deinit();
+    var argv_list = std.ArrayList(?[*:0]const u8).init(alloc);
+    defer argv_list.deinit();
 
     while (it_cmd.next()) |slice| {
-        try cmd.append(slice);
+        const dup = try alloc.alloc(u8, slice.len + 1);
+        @memcpy(dup[0..slice.len], slice);
+        dup[slice.len] = 0;
+        try argv_list.append(@as([*:0]const u8, @ptrCast(dup.ptr)));
     }
 
-    var process = std.process.Child.init(cmd.items, alloc);
-    try process.spawn();
+    // const null_ptr: [*:0]const u8 = null;
+    try argv_list.append(null);
+
+    const pid = std.c.fork();
+
+    if (pid == 0) {
+        const path = @as([*:0]const u8, @ptrCast(argv_list.items[0]));
+        const argv = @as([*:null]const ?[*:0]const u8, @ptrCast(argv_list.items.ptr));
+
+        _ = std.c.execve(path, argv, std.c.environ);
+        std.debug.print("execve failed\n", .{});
+        std.c._exit(1);
+    }
 }
 
 fn getProgramByName(config: ConfigParser.Config, name: []const u8) !ConfigParser.Program {
