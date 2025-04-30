@@ -1,7 +1,18 @@
 const std = @import("std");
 const ConfigParser = @This();
 
-pub const Program = struct { name: []u8, cmd: []u8 };
+pub const ProgramStatus = struct {
+    pid: c_int = 0,
+    running: bool = false,
+    nstart: u32 = 0,
+    exitno: c_int = 0,
+};
+
+pub const Program = struct {
+    name: []u8,
+    cmd: []u8,
+    status: ProgramStatus = ProgramStatus{},
+};
 
 pub const Config = struct {
     programs: []Program,
