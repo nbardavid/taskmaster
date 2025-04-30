@@ -6,11 +6,15 @@ pub const ProgramStatus = struct {
     running: bool = false,
     nstart: u32 = 0,
     exitno: c_int = 0,
+    stdout_fd: c_int = -1,
+    stdin_fd: c_int = -1,
 };
 
 pub const Program = struct {
     name: []u8,
     cmd: []u8,
+    stdout: []u8,
+    stderr: []u8,
     status: ProgramStatus = ProgramStatus{},
 };
 

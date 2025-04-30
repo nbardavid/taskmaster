@@ -5,6 +5,7 @@ const c = @cImport({
     @cInclude("readline/readline.h");
     @cInclude("sys/wait.h");
     @cInclude("unistd.h");
+    @cInclude("fcntl.h");
 });
 
 const ConfigParser = @import("config.zig");
@@ -48,6 +49,12 @@ fn start(alloc: std.mem.Allocator, program: *ConfigParser.Program) !void {
     if (pid == 0) {
         const path = @as([*:0]const u8, @ptrCast(argv_list.items[0]));
         const argv = @as([*:null]const ?[*:0]const u8, @ptrCast(argv_list.items.ptr));
+
+        const stderr_fd: c_int = std.c.open(cstrFromzstr(alloc, program.stdout), c.O_WRONLY | c.O_CREAT, 664);
+        const stdout_fd: c_int = std.c.open(cstrFromzstr(alloc, program.stderr), c.O_WRONLY | c.O_CREAT, 664);
+
+        std.c.dup2(std.c.STDOUT_FILENO, stdout_fd);
+        std.c.dup2(std.c.STDERR_FILENO, stderr_fd);
 
         _ = std.c.execve(path, argv, std.c.environ);
         std.log.err("execve failed", .{});
