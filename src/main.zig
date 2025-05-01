@@ -32,13 +32,22 @@ fn start(alloc: std.mem.Allocator, program: *ConfigParser.Program) !void {
     var it_cmd = std.mem.tokenizeScalar(u8, program.cmd, ' ');
 
     var argv_list = std.ArrayList(?[*:0]const u8).init(alloc);
-    defer argv_list.deinit();
+    var argv_ptr_list = std.ArrayList([]u8).init(alloc);
 
     while (it_cmd.next()) |slice| {
         const dup = try alloc.alloc(u8, slice.len + 1);
         @memcpy(dup[0..slice.len], slice);
         dup[slice.len] = 0;
         try argv_list.append(@as([*:0]const u8, @ptrCast(dup.ptr)));
+        try argv_ptr_list.append(dup);
+    }
+
+    defer {
+        for (argv_ptr_list.items) |item| {
+            alloc.free(item);
+        }
+        argv_ptr_list.deinit();
+        argv_list.deinit();
     }
 
     // const null_ptr: [*:0]const u8 = null;
@@ -50,11 +59,18 @@ fn start(alloc: std.mem.Allocator, program: *ConfigParser.Program) !void {
         const path = @as([*:0]const u8, @ptrCast(argv_list.items[0]));
         const argv = @as([*:null]const ?[*:0]const u8, @ptrCast(argv_list.items.ptr));
 
-        const stderr_fd: c_int = std.c.open(cstrFromzstr(alloc, program.stdout), c.O_WRONLY | c.O_CREAT, 664);
-        const stdout_fd: c_int = std.c.open(cstrFromzstr(alloc, program.stderr), c.O_WRONLY | c.O_CREAT, 664);
+        const stderr_filename: []u8 = try cstrFromzstr(alloc, program.stderr);
+        const stdout_filename: []u8 = try cstrFromzstr(alloc, program.stdout);
 
-        std.c.dup2(std.c.STDOUT_FILENO, stdout_fd);
-        std.c.dup2(std.c.STDERR_FILENO, stderr_fd);
+        const stdout_fd: c_int = c.open(stdout_filename.ptr, c.O_WRONLY | c.O_CREAT, @as(c_int, @intCast(0o664)));
+        const stderr_fd: c_int = c.open(stderr_filename.ptr, c.O_WRONLY | c.O_CREAT, @as(c_int, @intCast(0o664)));
+        if (stdout_fd == -1 or stderr_fd == -1) {
+            return error.cantOpenOutputFiles;
+        }
+
+        if (std.c.dup2(stdout_fd, std.c.STDOUT_FILENO) == -1 or std.c.dup2(stderr_fd, std.c.STDERR_FILENO) == -1) {
+            return error.Dup2Failed;
+        }
 
         _ = std.c.execve(path, argv, std.c.environ);
         std.log.err("execve failed", .{});
@@ -113,7 +129,7 @@ fn watchPrograms(programs: []ConfigParser.Program) void {
             continue;
         }
         if (c.waitpid(program.status.pid, &program.status.exitno, c.WNOHANG) != 0) {
-            std.log.info("program: {s} has exited with status code {d}\n", .{ program.name, program.status.exitno });
+            std.log.info("program: {s} has exited with status code {d}", .{ program.name, program.status.exitno });
         }
     }
 }

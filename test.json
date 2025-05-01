@@ -2,14 +2,14 @@
     "programs": [
         {
             "name": "bash",
-            "cmd": "/bin/bash"
-            "stdout": "/tmp/bash_stdout_test.log"
+            "cmd": "/bin/bash",
+            "stdout": "/tmp/bash_stdout_test.log",
             "stderr": "/tmp/bash_stderr_test.log"
         },
         {
             "name": "42i",
-            "cmd": "/usr/bin/echo Je suis Warren"
-            "stdout": "/tmp/42i_stdout_test.log"
+            "cmd": "/usr/bin/echo Je suis Warren",
+            "stdout": "/tmp/42i_stdout_test.log",
             "stderr": "/tmp/42i_stderr_test.log"
         }
     ]
