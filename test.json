@@ -1,16 +1,14 @@
 {
-    "programs": [
-        {
-            "name": "bash",
-            "cmd": "/bin/bash",
+    "programs": {
+        "bash": {
+            "cmd": "/bin/bash/salut",
             "stdout": "/tmp/bash_stdout_test.log",
             "stderr": "/tmp/bash_stderr_test.log"
         },
-        {
-            "name": "42i",
+        "nginx": {
             "cmd": "/usr/bin/echo Je suis Warren",
             "stdout": "/tmp/42i_stdout_test.log",
             "stderr": "/tmp/42i_stderr_test.log"
         }
-    ]
+    }
 }

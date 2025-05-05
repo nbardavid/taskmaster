@@ -17,7 +17,7 @@ const commandEnum = enum {
     reload,
 };
 
-fn cstrFromzstr(allocator: std.mem.Allocator, slice: []u8) ![]u8 {
+fn cstrFromzstr(allocator: std.mem.Allocator, slice: []const u8) ![]u8 {
     const cstring = try allocator.alloc(u8, slice.len + 1);
     @memcpy(cstring[0..slice.len], slice);
     cstring[slice.len] = 0;
@@ -29,7 +29,7 @@ fn sliceFromCstr(str: [*c]u8) []u8 {
 }
 
 fn start(alloc: std.mem.Allocator, program: *ConfigParser.Program) !void {
-    var it_cmd = std.mem.tokenizeScalar(u8, program.cmd, ' ');
+    var it_cmd = std.mem.tokenizeScalar(u8, program.config.cmd, ' ');
 
     var argv_list = std.ArrayList(?[*:0]const u8).init(alloc);
     var argv_ptr_list = std.ArrayList([]u8).init(alloc);
@@ -59,8 +59,8 @@ fn start(alloc: std.mem.Allocator, program: *ConfigParser.Program) !void {
         const path = @as([*:0]const u8, @ptrCast(argv_list.items[0]));
         const argv = @as([*:null]const ?[*:0]const u8, @ptrCast(argv_list.items.ptr));
 
-        const stderr_filename: []u8 = try cstrFromzstr(alloc, program.stderr);
-        const stdout_filename: []u8 = try cstrFromzstr(alloc, program.stdout);
+        const stderr_filename: []u8 = try cstrFromzstr(alloc, program.config.stderr);
+        const stdout_filename: []u8 = try cstrFromzstr(alloc, program.config.stdout);
 
         const stdout_fd: c_int = c.open(stdout_filename.ptr, c.O_WRONLY | c.O_CREAT, @as(c_int, @intCast(0o664)));
         const stderr_fd: c_int = c.open(stderr_filename.ptr, c.O_WRONLY | c.O_CREAT, @as(c_int, @intCast(0o664)));
@@ -80,12 +80,12 @@ fn start(alloc: std.mem.Allocator, program: *ConfigParser.Program) !void {
     program.status.pid = pid;
     program.status.nstart += 1;
     program.status.running = true;
-    std.log.info("program: {s} started", .{program.name});
+    std.log.info("program: {s} started", .{program.config.name});
 }
 
 fn getProgramByName(config: ConfigParser.Config, name: []const u8) !*ConfigParser.Program {
-    for (config.programs) |*program| {
-        if (std.mem.eql(u8, program.name, name)) {
+    for (config.programs.items) |*program| {
+        if (std.mem.eql(u8, program.config.name, name)) {
             return program;
         }
     }
@@ -118,18 +118,18 @@ fn execute(allocator: std.mem.Allocator, configParser: *ConfigParser, string_cmd
             std.debug.print("{}\n", .{configParser.config});
         },
         .reload => {
-            try configParser.update();
+            // try configParser.update();
         },
     }
 }
 
-fn watchPrograms(programs: []ConfigParser.Program) void {
-    for (programs) |*program| {
+fn watchPrograms(programs: std.ArrayList(ConfigParser.Program)) void {
+    for (programs.items) |*program| {
         if (program.status.running == false) {
             continue;
         }
         if (c.waitpid(program.status.pid, &program.status.exitno, c.WNOHANG) != 0) {
-            std.log.info("program: {s} has exited with status code {d}", .{ program.name, program.status.exitno });
+            std.log.info("program: {s} has exited with status code {d}", .{ program.config.name, program.status.exitno });
         }
     }
 }
@@ -146,7 +146,7 @@ fn shell(allocator: std.mem.Allocator, configParser: *ConfigParser, prompt: []u8
             continue;
         };
 
-        watchPrograms(configParser.parsedConfig.value.programs);
+        watchPrograms(configParser.config.programs);
     }
 }
 
