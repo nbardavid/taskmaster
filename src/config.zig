@@ -45,22 +45,34 @@ pub const Program = struct {
         return hasher.final();
     }
 
-    pub fn format(self: *const Program, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        const color = std.io.tty.Color;
+    pub fn clone(self: Program, allocator: std.mem.Allocator) !Program {
+        const new_program: Program = Program{
+            .config = ProgramConfig{
+                .name = try allocator.dupe(u8, self.config.name),
+                .cmd = try allocator.dupe(u8, self.config.cmd),
+                .stderr = try allocator.dupe(u8, self.config.stderr),
+                .stdout = try allocator.dupe(u8, self.config.stdout),
+            },
+            .status = self.status,
+        };
+        return new_program;
+    }
 
+    pub fn format(self: *const Program, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
-        try writer.print("{}===== Config =====\n{}", .{ color.green, color.reset });
+        try writer.print("===== Config =====\n", .{});
         try writer.print("name: {s}\ncmd: {s}\nstdout: {s}\nstderr: {s}\n", .{ self.config.name, self.config.cmd, self.config.stdout, self.config.stderr });
-        try writer.print("{}===== Status =====\n", .{color.green});
+        try writer.print("===== Status =====\n", .{});
         try writer.print(
-            \\hash: {}\n
-            \\need_restart: {}\n
-            \\pid: {}\n
-            \\running: {}\n
-            \\nstart: {}\n
-            \\exitno: {}\n
-            \\stdout_fd: {}\n
-            \\stdin_fd: {}\n
+            \\hash: {d}
+            \\need_restart: {}
+            \\pid: {d}
+            \\running: {}
+            \\nstart: {}
+            \\exitno: {d}
+            \\stdout_fd: {d}
+            \\stdin_fd: {d}
+            \\
         ,
             .{
                 self.status.hash,
@@ -73,7 +85,8 @@ pub const Program = struct {
                 self.status.stdin_fd,
             },
         );
-        try writer.print("{}", .{color.reset});
+
+        // try writer.print("{}", .{color.reset});
     }
 };
 
@@ -83,14 +96,13 @@ pub const Config = struct {
     pub fn format(self: *const Config, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
         for (self.programs.items, 0..) |program, i| {
-            try writer.print("Program: {d}\n", .{i});
+            try writer.print("\nProgram: {d}\n", .{i});
             try writer.print("{}", .{program});
         }
     }
 };
 
 alloc: std.mem.Allocator,
-// parsedConfig: std.json.Parsed(Config),
 config: Config,
 
 pub fn init(alloc: std.mem.Allocator) !ConfigParser {
@@ -104,46 +116,61 @@ pub fn init(alloc: std.mem.Allocator) !ConfigParser {
 }
 
 pub fn deinit(self: *ConfigParser) void {
+    for (self.config.programs.items) |program| {
+        self.alloc.free(program.config.name);
+        self.alloc.free(program.config.cmd);
+        self.alloc.free(program.config.stdout);
+        self.alloc.free(program.config.stderr);
+    }
     self.config.programs.deinit();
-    // for (self.config.programs) |program| {
-    //     // self.alloc.destroy(program);
-    // }
-    // self.alloc.destroy(self.config);
 }
 
 pub fn getProgramByName(self: ConfigParser, name: []const u8) !*ConfigParser.Program {
-    for (self.config.programs) |*program| {
+    for (self.config.programs.items) |*program| {
         if (std.mem.eql(u8, program.config.name, name)) {
             return program;
         }
     }
     return error.programNotFound;
 }
-//
-// pub fn update(self: *ConfigParser) !void {
-//     // self.parsedConfig.deinit();
-//     const new_config = try parse(self.alloc);
-//
-//     var programs = std.ArrayList(Program).init(self.alloc);
-//     var programs = std.MultiArrayList()
-//     for (new_config.value.programs) |*program| {
-//         program.computeHash();
-//         const old_program = self.getProgramByName(program.name) catch {
-//             programs.append(program); //DOIT CLONE POUR FREE LE RESTE FACILEMENT
-//             continue;
-//         };
-//
-//         if (program.status.hash != old_program.status.hash) {
-//             program.status.need_restart = true;
-//             programs.append(program); //DOIT CLONE POUR FREE LE RESTE FACILEMENT
-//         }
-//     }
-//
-//     self.config.programs = programs;
-//
-//     // self.config = self.parsedConfig.value;
-// }
-//
+
+pub fn update(self: *ConfigParser) !void {
+    // self.parsedConfig.deinit();
+    const new_config = try parse(self.alloc);
+
+    var programs = std.ArrayList(Program).init(self.alloc);
+    for (new_config.items) |*program| {
+        const old_program = self.getProgramByName(program.config.name) catch {
+            try programs.append(try program.clone(self.alloc)); //DOIT CLONE POUR FREE LE RESTE FACILEMENT
+            continue;
+        };
+
+        if (program.status.hash != old_program.status.hash) {
+            // program.status.need_restart = true;
+            try programs.append(try program.clone(self.alloc)); //DOIT CLONE POUR FREE LE RESTE FACILEMENT
+        } else {
+            try programs.append(try old_program.clone(self.alloc)); //DOIT CLONE POUR FREE LE RESTE FACILEMENT
+        }
+    }
+    for (self.config.programs.items) |program| {
+        self.alloc.free(program.config.name);
+        self.alloc.free(program.config.cmd);
+        self.alloc.free(program.config.stdout);
+        self.alloc.free(program.config.stderr);
+    }
+    self.config.programs.deinit();
+
+    for (new_config.items) |program| {
+        self.alloc.free(program.config.name);
+        self.alloc.free(program.config.cmd);
+        self.alloc.free(program.config.stdout);
+        self.alloc.free(program.config.stderr);
+    }
+    new_config.deinit();
+
+    self.config.programs = programs;
+}
+
 pub fn parse(allocator: std.mem.Allocator) !std.ArrayList(Program) {
     const file = try std.fs.cwd().openFile("./test.json", .{});
     defer file.close();
@@ -167,19 +194,20 @@ pub fn parse(allocator: std.mem.Allocator) !std.ArrayList(Program) {
         const name = entry.key_ptr.*;
         const json_program = entry.value_ptr.*;
 
-        std.debug.print("SALUTSALUTSLAUT\n\n\n", .{});
         const parsed_program = try std.json.parseFromValue(ProgramJson, allocator, json_program, .{});
-        std.debug.print("SALUTSALUTSLAUT\n\n\n", .{});
+        defer parsed_program.deinit();
 
-        const new_program = Program{
+        var new_program = Program{
             .config = ProgramConfig{
-                .name = name,
-                .cmd = parsed_program.value.cmd,
-                .stderr = parsed_program.value.stderr,
-                .stdout = parsed_program.value.stdout,
+                .name = try allocator.dupe(u8, name),
+                .cmd = try allocator.dupe(u8, parsed_program.value.cmd),
+                .stderr = try allocator.dupe(u8, parsed_program.value.stderr),
+                .stdout = try allocator.dupe(u8, parsed_program.value.stdout),
             },
             .status = ProgramStatus{},
         };
+
+        new_program.status.hash = new_program.computeHash();
 
         try new_programs.append(new_program);
     }

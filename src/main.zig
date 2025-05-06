@@ -9,12 +9,14 @@ const c = @cImport({
 });
 
 const ConfigParser = @import("config.zig");
+const Color = @import("color.zig");
 
 const commandEnum = enum {
     config,
     start,
     help,
     reload,
+    ls,
 };
 
 fn cstrFromzstr(allocator: std.mem.Allocator, slice: []const u8) ![]u8 {
@@ -80,7 +82,7 @@ fn start(alloc: std.mem.Allocator, program: *ConfigParser.Program) !void {
     program.status.pid = pid;
     program.status.nstart += 1;
     program.status.running = true;
-    std.log.info("program: {s} started", .{program.config.name});
+    logProgramStart(program.config.name);
 }
 
 fn getProgramByName(config: ConfigParser.Config, name: []const u8) !*ConfigParser.Program {
@@ -118,19 +120,52 @@ fn execute(allocator: std.mem.Allocator, configParser: *ConfigParser, string_cmd
             std.debug.print("{}\n", .{configParser.config});
         },
         .reload => {
-            // try configParser.update();
+            try configParser.update();
+        },
+        .ls => {
+            try forEachMapProgram(allocator, configParser.config.programs, logIsProgramRunning);
         },
     }
 }
 
-fn watchPrograms(programs: std.ArrayList(ConfigParser.Program)) void {
+fn logProgramExit(name: []const u8, exit_code: i32) void {
+    std.log.info("{s}[{s}-{s}]{s} {s}{s}{s} has exited with status code {s}{d}{s}", .{
+        Color.gray,  Color.red,   Color.gray, Color.reset,
+        Color.reset, name,        Color.gray, Color.green,
+        exit_code,   Color.reset,
+    });
+}
+
+fn logProgramStart(name: []const u8) void {
+    std.log.info("{s}[{s}+{s}]{s} {s}", .{
+        Color.gray,  Color.green, Color.gray,
+        Color.reset, name,
+    });
+}
+
+fn forEachMapProgram(allocator: std.mem.Allocator, programs: std.ArrayList(ConfigParser.Program), comptime function: fn (std.mem.Allocator, *ConfigParser.Program) anyerror!void) !void {
     for (programs.items) |*program| {
-        if (program.status.running == false) {
-            continue;
-        }
-        if (c.waitpid(program.status.pid, &program.status.exitno, c.WNOHANG) != 0) {
-            std.log.info("program: {s} has exited with status code {d}", .{ program.config.name, program.status.exitno });
-        }
+        try function(allocator, program);
+    }
+}
+
+fn logIsProgramRunning(alloc: std.mem.Allocator, program: *ConfigParser.Program) !void {
+    _ = alloc;
+    if (program.status.running) {
+        std.log.info("{s}: {s}running{s}", .{ program.config.name, Color.green, Color.reset });
+    } else {
+        std.log.info("{s}: {s}stopped{s}", .{ program.config.name, Color.red, Color.reset });
+    }
+}
+
+fn watchProgram(alloc: std.mem.Allocator, program: *ConfigParser.Program) !void {
+    if (program.status.running == false) {
+        return;
+    } else if (c.waitpid(program.status.pid, &program.status.exitno, c.WNOHANG) != 0) {
+        logProgramExit(program.config.name, program.status.exitno);
+        program.status.running = false;
+    } else if (program.status.need_restart) {
+        try start(alloc, program);
     }
 }
 
@@ -146,7 +181,7 @@ fn shell(allocator: std.mem.Allocator, configParser: *ConfigParser, prompt: []u8
             continue;
         };
 
-        watchPrograms(configParser.config.programs);
+        try forEachMapProgram(allocator, configParser.config.programs, watchProgram);
     }
 }
 
