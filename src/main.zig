@@ -9,6 +9,7 @@ const c = @cImport({
 });
 
 const ConfigParser = @import("config.zig");
+const Program = @import("program.zig");
 const Color = @import("color.zig");
 
 const commandEnum = enum {
@@ -29,63 +30,64 @@ fn cstrFromzstr(allocator: std.mem.Allocator, slice: []const u8) ![]u8 {
 fn sliceFromCstr(str: [*c]u8) []u8 {
     return std.mem.span(str);
 }
+//
+// fn start(alloc: std.mem.Allocator, program: *Program) !void {
+//     var it_cmd = std.mem.tokenizeScalar(u8, program.config.cmd, ' ');
+//
+//     var argv_list = std.ArrayList(?[*:0]const u8).init(alloc);
+//     var argv_ptr_list = std.ArrayList([]u8).init(alloc);
+//
+//     while (it_cmd.next()) |slice| {
+//         const dup = try alloc.alloc(u8, slice.len + 1);
+//         @memcpy(dup[0..slice.len], slice);
+//         dup[slice.len] = 0;
+//         try argv_list.append(@as([*:0]const u8, @ptrCast(dup.ptr)));
+//         try argv_ptr_list.append(dup);
+//     }
+//
+//     defer {
+//         for (argv_ptr_list.items) |item| {
+//             alloc.free(item);
+//         }
+//         argv_ptr_list.deinit();
+//         argv_list.deinit();
+//     }
+//
+//     // const null_ptr: [*:0]const u8 = null;
+//     try argv_list.append(null);
+//
+//     const pid = std.c.fork();
+//
+//     if (pid == 0) {
+//         const path = @as([*:0]const u8, @ptrCast(argv_list.items[0]));
+//         const argv = @as([*:null]const ?[*:0]const u8, @ptrCast(argv_list.items.ptr));
+//
+//         const stderr_filename: []u8 = try cstrFromzstr(alloc, program.config.stderr);
+//         const stdout_filename: []u8 = try cstrFromzstr(alloc, program.config.stdout);
+//
+//         const stdout_fd: c_int = c.open(stdout_filename.ptr, c.O_WRONLY | c.O_CREAT, @as(c_int, @intCast(0o664)));
+//         const stderr_fd: c_int = c.open(stderr_filename.ptr, c.O_WRONLY | c.O_CREAT, @as(c_int, @intCast(0o664)));
+//         if (stdout_fd == -1 or stderr_fd == -1) {
+//             return error.cantOpenOutputFiles;
+//         }
+//
+//         if (std.c.dup2(stdout_fd, std.c.STDOUT_FILENO) == -1 or std.c.dup2(stderr_fd, std.c.STDERR_FILENO) == -1) {
+//             return error.Dup2Failed;
+//         }
+//
+//         _ = std.c.execve(path, argv, std.c.environ);
+//         std.log.err("execve failed", .{});
+//         std.process.exit(1);
+//     }
+//
+//     program.process.items[0].pid = pid;
+//     program.process.items[0].nstart += 1;
+//     program.nprocess_running += 1;
+//     program.process.items[0].running = true;
+//     logProgramStart(program.config.name);
+// }
 
-fn start(alloc: std.mem.Allocator, program: *ConfigParser.Program) !void {
-    var it_cmd = std.mem.tokenizeScalar(u8, program.config.cmd, ' ');
-
-    var argv_list = std.ArrayList(?[*:0]const u8).init(alloc);
-    var argv_ptr_list = std.ArrayList([]u8).init(alloc);
-
-    while (it_cmd.next()) |slice| {
-        const dup = try alloc.alloc(u8, slice.len + 1);
-        @memcpy(dup[0..slice.len], slice);
-        dup[slice.len] = 0;
-        try argv_list.append(@as([*:0]const u8, @ptrCast(dup.ptr)));
-        try argv_ptr_list.append(dup);
-    }
-
-    defer {
-        for (argv_ptr_list.items) |item| {
-            alloc.free(item);
-        }
-        argv_ptr_list.deinit();
-        argv_list.deinit();
-    }
-
-    // const null_ptr: [*:0]const u8 = null;
-    try argv_list.append(null);
-
-    const pid = std.c.fork();
-
-    if (pid == 0) {
-        const path = @as([*:0]const u8, @ptrCast(argv_list.items[0]));
-        const argv = @as([*:null]const ?[*:0]const u8, @ptrCast(argv_list.items.ptr));
-
-        const stderr_filename: []u8 = try cstrFromzstr(alloc, program.config.stderr);
-        const stdout_filename: []u8 = try cstrFromzstr(alloc, program.config.stdout);
-
-        const stdout_fd: c_int = c.open(stdout_filename.ptr, c.O_WRONLY | c.O_CREAT, @as(c_int, @intCast(0o664)));
-        const stderr_fd: c_int = c.open(stderr_filename.ptr, c.O_WRONLY | c.O_CREAT, @as(c_int, @intCast(0o664)));
-        if (stdout_fd == -1 or stderr_fd == -1) {
-            return error.cantOpenOutputFiles;
-        }
-
-        if (std.c.dup2(stdout_fd, std.c.STDOUT_FILENO) == -1 or std.c.dup2(stderr_fd, std.c.STDERR_FILENO) == -1) {
-            return error.Dup2Failed;
-        }
-
-        _ = std.c.execve(path, argv, std.c.environ);
-        std.log.err("execve failed", .{});
-        std.process.exit(1);
-    }
-
-    program.status.pid = pid;
-    program.status.nstart += 1;
-    program.status.running = true;
-    logProgramStart(program.config.name);
-}
-
-fn getProgramByName(config: ConfigParser.Config, name: []const u8) !*ConfigParser.Program {
+fn getProgramByName(config: ConfigParser.Config, name: []const u8) !*Program {
     for (config.programs.items) |*program| {
         if (std.mem.eql(u8, program.config.name, name)) {
             return program;
@@ -110,7 +112,7 @@ fn execute(allocator: std.mem.Allocator, configParser: *ConfigParser, string_cmd
         .start => {
             if (it_cmd.next()) |arg| {
                 const program_ptr = try getProgramByName(configParser.config, arg);
-                try start(allocator, program_ptr);
+                try program_ptr.startAllProcess(allocator);
             } else {
                 // printUsage(cmd_enum.start);
             }
@@ -123,7 +125,8 @@ fn execute(allocator: std.mem.Allocator, configParser: *ConfigParser, string_cmd
             try configParser.update();
         },
         .ls => {
-            try forEachMapProgram(allocator, configParser.config.programs, logIsProgramRunning);
+            try configParser.config.ForEachProgram(allocator, Program.logIsRunning);
+            // try forEachMapProgram(allocator, configParser.config.programs, logIsProgramRunning);
         },
     }
 }
@@ -143,13 +146,7 @@ fn logProgramStart(name: []const u8) void {
     });
 }
 
-fn forEachMapProgram(allocator: std.mem.Allocator, programs: std.ArrayList(ConfigParser.Program), comptime function: fn (std.mem.Allocator, *ConfigParser.Program) anyerror!void) !void {
-    for (programs.items) |*program| {
-        try function(allocator, program);
-    }
-}
-
-fn logIsProgramRunning(alloc: std.mem.Allocator, program: *ConfigParser.Program) !void {
+fn logIsProgramRunning(alloc: std.mem.Allocator, program: *Program) !void {
     _ = alloc;
     if (program.status.running) {
         std.log.info("{s}: {s}running{s}", .{ program.config.name, Color.green, Color.reset });
@@ -158,20 +155,11 @@ fn logIsProgramRunning(alloc: std.mem.Allocator, program: *ConfigParser.Program)
     }
 }
 
-fn watchProgram(alloc: std.mem.Allocator, program: *ConfigParser.Program) !void {
-    if (program.status.running == false) {
-        return;
-    } else if (c.waitpid(program.status.pid, &program.status.exitno, c.WNOHANG) != 0) {
-        logProgramExit(program.config.name, program.status.exitno);
-        program.status.running = false;
-    } else if (program.status.need_restart) {
-        try start(alloc, program);
-    }
-}
-
 fn shell(allocator: std.mem.Allocator, configParser: *ConfigParser, prompt: []u8) !void {
     var input: [*c]u8 = null;
     while (true) {
+        try configParser.config.ForEachProgramProcess(allocator, Program.ProcessStatus.watchMySelf);
+
         input = c.readline(prompt.ptr);
         if (input == null)
             break;
@@ -180,8 +168,6 @@ fn shell(allocator: std.mem.Allocator, configParser: *ConfigParser, prompt: []u8
             std.log.err("{!}", .{e});
             continue;
         };
-
-        try forEachMapProgram(allocator, configParser.config.programs, watchProgram);
     }
 }
 

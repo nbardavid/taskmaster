@@ -2,18 +2,21 @@
     "programs": {
         "bash": {
             "cmd": "/bin/bash",
+            "numprocs": "1",
             "stdout": "/tmp/bash_stdout_test.log",
             "stderr": "/tmp/bash_stderr_test.log"
         },
         "42i": {
             "cmd": "/usr/bin/echo Je suis Warren",
+            "numprocs": "1",
             "stdout": "/tmp/42i_stdout_test.log",
             "stderr": "/tmp/42i_stderr_test.log"
         },
         "sleep": {
-            "cmd": "/usr/bin/sleep 10",
-            "stdout": "/tmp/42i_stdout_test.log",
-            "stderr": "/tmp/42i_stderr_test.log"
+            "cmd": "/bin/bash -c '/tmp/testtest'",
+            "numprocs": "3",
+            "stdout": "/tmp/sleep_stdout_test.log",
+            "stderr": "/tmp/sleep_stderr_test.log"
         }
     }
 }
