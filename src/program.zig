@@ -26,10 +26,8 @@ pub const ProcessStatus = struct {
     stdin_fd: c_int = -1,
 
     pub fn watchMySelf(self: *ProcessStatus, allocator: std.mem.Allocator, program: *Program, nproc: usize) !void {
-        if (self.running == false and program.config.autostart != true) {
+        if (self.running == false) {
             return;
-        } else if (program.config.autostart == true) {
-            // self.startProcess(allocator: std.mem.Allocator, program: *Program, nproc: usize)
         }
         if (c.waitpid(self.pid, &self.exitno, c.WNOHANG) != 0) {
             try self.logExit(allocator, program, nproc);

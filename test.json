@@ -4,19 +4,22 @@
             "cmd": "/bin/bash",
             "numprocs": "1",
             "stdout": "/tmp/bash_stdout_test.log",
-            "stderr": "/tmp/bash_stderr_test.log"
+            "stderr": "/tmp/bash_stderr_test.log",
+            "autostart": false
         },
         "42i": {
             "cmd": "/usr/bin/echo Je suis Warren",
             "numprocs": "1",
             "stdout": "/tmp/42i_stdout_test.log",
-            "stderr": "/tmp/42i_stderr_test.log"
+            "stderr": "/tmp/42i_stderr_test.log",
+            "autostart": false
         },
         "sleep": {
             "cmd": "/bin/bash -c '/tmp/testtest'",
             "numprocs": "3",
             "stdout": "/tmp/sleep_stdout_test.log",
-            "stderr": "/tmp/sleep_stderr_test.log"
+            "stderr": "/tmp/sleep_stderr_test.log",
+            "autostart": true
         }
     }
 }

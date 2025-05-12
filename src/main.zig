@@ -6,11 +6,14 @@ const c = @cImport({
     @cInclude("sys/wait.h");
     @cInclude("unistd.h");
     @cInclude("fcntl.h");
+    @cInclude("signal.h");
 });
 
 const ConfigParser = @import("config.zig");
 const Program = @import("program.zig");
 const Color = @import("color.zig");
+
+var g_configParser_ptr: *ConfigParser = undefined;
 
 const commandEnum = enum {
     config,
@@ -19,6 +22,11 @@ const commandEnum = enum {
     reload,
     ls,
 };
+
+fn reloadOnSighup(signal: c_int) callconv(.C) void {
+    _ = signal;
+    g_configParser_ptr.update() catch {};
+}
 
 fn cstrFromzstr(allocator: std.mem.Allocator, slice: []const u8) ![]u8 {
     const cstring = try allocator.alloc(u8, slice.len + 1);
@@ -30,62 +38,6 @@ fn cstrFromzstr(allocator: std.mem.Allocator, slice: []const u8) ![]u8 {
 fn sliceFromCstr(str: [*c]u8) []u8 {
     return std.mem.span(str);
 }
-//
-// fn start(alloc: std.mem.Allocator, program: *Program) !void {
-//     var it_cmd = std.mem.tokenizeScalar(u8, program.config.cmd, ' ');
-//
-//     var argv_list = std.ArrayList(?[*:0]const u8).init(alloc);
-//     var argv_ptr_list = std.ArrayList([]u8).init(alloc);
-//
-//     while (it_cmd.next()) |slice| {
-//         const dup = try alloc.alloc(u8, slice.len + 1);
-//         @memcpy(dup[0..slice.len], slice);
-//         dup[slice.len] = 0;
-//         try argv_list.append(@as([*:0]const u8, @ptrCast(dup.ptr)));
-//         try argv_ptr_list.append(dup);
-//     }
-//
-//     defer {
-//         for (argv_ptr_list.items) |item| {
-//             alloc.free(item);
-//         }
-//         argv_ptr_list.deinit();
-//         argv_list.deinit();
-//     }
-//
-//     // const null_ptr: [*:0]const u8 = null;
-//     try argv_list.append(null);
-//
-//     const pid = std.c.fork();
-//
-//     if (pid == 0) {
-//         const path = @as([*:0]const u8, @ptrCast(argv_list.items[0]));
-//         const argv = @as([*:null]const ?[*:0]const u8, @ptrCast(argv_list.items.ptr));
-//
-//         const stderr_filename: []u8 = try cstrFromzstr(alloc, program.config.stderr);
-//         const stdout_filename: []u8 = try cstrFromzstr(alloc, program.config.stdout);
-//
-//         const stdout_fd: c_int = c.open(stdout_filename.ptr, c.O_WRONLY | c.O_CREAT, @as(c_int, @intCast(0o664)));
-//         const stderr_fd: c_int = c.open(stderr_filename.ptr, c.O_WRONLY | c.O_CREAT, @as(c_int, @intCast(0o664)));
-//         if (stdout_fd == -1 or stderr_fd == -1) {
-//             return error.cantOpenOutputFiles;
-//         }
-//
-//         if (std.c.dup2(stdout_fd, std.c.STDOUT_FILENO) == -1 or std.c.dup2(stderr_fd, std.c.STDERR_FILENO) == -1) {
-//             return error.Dup2Failed;
-//         }
-//
-//         _ = std.c.execve(path, argv, std.c.environ);
-//         std.log.err("execve failed", .{});
-//         std.process.exit(1);
-//     }
-//
-//     program.process.items[0].pid = pid;
-//     program.process.items[0].nstart += 1;
-//     program.nprocess_running += 1;
-//     program.process.items[0].running = true;
-//     logProgramStart(program.config.name);
-// }
 
 fn getProgramByName(config: ConfigParser.Config, name: []const u8) !*Program {
     for (config.programs.items) |*program| {
@@ -155,8 +107,20 @@ fn logIsProgramRunning(alloc: std.mem.Allocator, program: *Program) !void {
     }
 }
 
+fn launchAutoStart(allocator: std.mem.Allocator, config: ConfigParser.Config) !void {
+    std.debug.print("Starting autostart-enabled programs...\n", .{});
+    for (config.programs.items) |*program| {
+        if (program.config.autostart == true) {
+            try program.startAllProcess(allocator);
+        }
+    }
+    std.debug.print("All autostart-enabled programs have been started.\n", .{});
+}
+
 fn shell(allocator: std.mem.Allocator, configParser: *ConfigParser, prompt: []u8) !void {
     var input: [*c]u8 = null;
+    try launchAutoStart(allocator, configParser.config);
+
     while (true) {
         try configParser.config.ForEachProgramProcess(allocator, Program.ProcessStatus.watchMySelf);
 
@@ -178,11 +142,20 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
+    var sa: c.struct_sigaction = std.mem.zeroes(c.struct_sigaction);
+    sa.__sigaction_handler.sa_handler = reloadOnSighup;
+    sa.sa_flags = 0;
+    _ = c.sigemptyset(&sa.sa_mask);
+
+    if (c.sigaction(c.SIGHUP, &sa, null) != 0) {
+        return error.SignalSetupFailed;
+    }
 
     if (args.len > 1) {
         const prompt = try cstrFromzstr(allocator, args[1]);
         defer allocator.free(prompt);
         var configParser = try ConfigParser.init(allocator);
+        g_configParser_ptr = &configParser;
         defer configParser.deinit();
 
         // parse_config_file(allocator, config);

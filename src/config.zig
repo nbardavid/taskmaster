@@ -11,6 +11,7 @@ pub const ProgramJson = struct {
     stdout: []u8,
     stderr: []u8,
     numprocs: u32,
+    autostart: bool = false,
 };
 
 pub const Config = struct {
@@ -121,6 +122,7 @@ pub fn update(self: *ConfigParser) !void {
     new_config.deinit();
 
     self.config.programs = programs;
+    std.debug.print("Config reloaded\n", .{});
 }
 
 pub fn parse(allocator: std.mem.Allocator) !std.ArrayList(Program) {
@@ -155,6 +157,7 @@ pub fn parse(allocator: std.mem.Allocator) !std.ArrayList(Program) {
                 .stderr = try allocator.dupe(u8, parsed_program.value.stderr),
                 .stdout = try allocator.dupe(u8, parsed_program.value.stdout),
                 .numprocs = parsed_program.value.numprocs,
+                .autostart = parsed_program.value.autostart,
             },
             .process = std.ArrayList(Program.ProcessStatus).init(allocator),
         };
