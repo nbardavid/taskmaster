@@ -3,6 +3,8 @@ const stdout = std.io.getStdOut();
 
 const c = @cImport({
     @cInclude("readline/readline.h");
+    @cInclude("sys/time.h");
+    @cInclude("time.h");
     @cInclude("sys/wait.h");
     @cInclude("unistd.h");
     @cInclude("fcntl.h");
@@ -12,7 +14,9 @@ const c = @cImport({
 const ConfigParser = @import("config.zig");
 const Program = @import("program.zig");
 const Color = @import("color.zig");
+const log = @import("log.zig");
 
+var supervisor_pid: c_int = undefined;
 var g_configParser_ptr: *ConfigParser = undefined;
 
 const commandEnum = enum {
@@ -22,6 +26,11 @@ const commandEnum = enum {
     reload,
     ls,
 };
+
+fn openLogFile(allocator: std.mem.Allocator) !void {
+    _ = allocator;
+    return;
+}
 
 fn reloadOnSighup(signal: c_int) callconv(.C) void {
     _ = signal;
@@ -83,43 +92,31 @@ fn execute(allocator: std.mem.Allocator, configParser: *ConfigParser, string_cmd
     }
 }
 
-fn logProgramExit(name: []const u8, exit_code: i32) void {
-    std.log.info("{s}[{s}-{s}]{s} {s}{s}{s} has exited with status code {s}{d}{s}", .{
-        Color.gray,  Color.red,   Color.gray, Color.reset,
-        Color.reset, name,        Color.gray, Color.green,
-        exit_code,   Color.reset,
-    });
-}
-
-fn logProgramStart(name: []const u8) void {
-    std.log.info("{s}[{s}+{s}]{s} {s}", .{
-        Color.gray,  Color.green, Color.gray,
-        Color.reset, name,
-    });
-}
-
-fn logIsProgramRunning(alloc: std.mem.Allocator, program: *Program) !void {
-    _ = alloc;
-    if (program.status.running) {
-        std.log.info("{s}: {s}running{s}", .{ program.config.name, Color.green, Color.reset });
-    } else {
-        std.log.info("{s}: {s}stopped{s}", .{ program.config.name, Color.red, Color.reset });
-    }
-}
-
 fn launchAutoStart(allocator: std.mem.Allocator, config: ConfigParser.Config) !void {
-    std.debug.print("Starting autostart-enabled programs...\n", .{});
+    try log.time();
+    try log.file.print("Starting autostart-enabled programs...\n", .{});
+
     for (config.programs.items) |*program| {
         if (program.config.autostart == true) {
             try program.startAllProcess(allocator);
         }
     }
-    std.debug.print("All autostart-enabled programs have been started.\n", .{});
+
+    try log.time();
+    try log.file.print("All autostart-enabled programs have been started.\n", .{});
+}
+
+fn supervisor(allocator: std.mem.Allocator, configParser: *ConfigParser) !void {
+    supervisor_pid = c.fork();
+    while (supervisor_pid == 0) {
+        try configParser.config.ForEachProgramProcess(allocator, Program.ProcessStatus.watchMySelf);
+    }
 }
 
 fn shell(allocator: std.mem.Allocator, configParser: *ConfigParser, prompt: []u8) !void {
     var input: [*c]u8 = null;
     try launchAutoStart(allocator, configParser.config);
+    // try supervisor(allocator, configParser);
 
     while (true) {
         try configParser.config.ForEachProgramProcess(allocator, Program.ProcessStatus.watchMySelf);
@@ -133,12 +130,17 @@ fn shell(allocator: std.mem.Allocator, configParser: *ConfigParser, prompt: []u8
             continue;
         };
     }
+    _ = c.waitpid(supervisor_pid, null, 0);
 }
 
 pub fn main() !void {
     var debugAlloc: std.heap.DebugAllocator(.{}) = .init;
     defer _ = debugAlloc.deinit();
     const allocator = debugAlloc.allocator();
+
+    const file = try std.fs.cwd().createFile("taskmaster.logs", .{ .read = false });
+    defer file.close();
+    log.file = file.writer();
 
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);

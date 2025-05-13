@@ -15,7 +15,7 @@
             "autostart": false
         },
         "sleep": {
-            "cmd": "/bin/bash -c '/tmp/testtest'",
+            "cmd": "/bin/sleep 1",
             "numprocs": "3",
             "stdout": "/tmp/sleep_stdout_test.log",
             "stderr": "/tmp/sleep_stderr_test.log",

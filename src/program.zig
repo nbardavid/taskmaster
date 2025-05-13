@@ -1,6 +1,7 @@
 const Program = @This();
 const std = @import("std");
 const Color = @import("color.zig");
+const log = @import("log.zig");
 
 const c = @cImport({
     @cInclude("readline/readline.h");
@@ -29,8 +30,14 @@ pub const ProcessStatus = struct {
         if (self.running == false) {
             return;
         }
-        if (c.waitpid(self.pid, &self.exitno, c.WNOHANG) != 0) {
+        const err = c.waitpid(self.pid, &self.exitno, c.WNOHANG);
+        if (err == -1) {
+            std.debug.print("salope\n", .{});
+            return;
+        }
+        if (err > 0) {
             try self.logExit(allocator, program, nproc);
+            program.nprocess_running -= 1;
             self.running = false;
         }
     }
@@ -66,6 +73,12 @@ pub const ProcessStatus = struct {
         const pid = std.c.fork();
 
         if (pid == 0) {
+            std.debug.print("argv:\n", .{});
+            var i: usize = 0;
+            while (argv_list.items[i] != null) : (i += 1) {
+                std.debug.print("  argv[{d}] = '{?s}'\n", .{ i, argv_list.items[i] });
+            }
+
             const path = @as([*:0]const u8, @ptrCast(argv_list.items[0]));
             const argv = @as([*:null]const ?[*:0]const u8, @ptrCast(argv_list.items.ptr));
 
@@ -75,6 +88,7 @@ pub const ProcessStatus = struct {
             const stdout_fd: c_int = c.open(stdout_filename.ptr, c.O_WRONLY | c.O_CREAT, @as(c_int, @intCast(0o664)));
             const stderr_fd: c_int = c.open(stderr_filename.ptr, c.O_WRONLY | c.O_CREAT, @as(c_int, @intCast(0o664)));
             if (stdout_fd == -1 or stderr_fd == -1) {
+                std.log.err("cantOpenOutputFiles", .{});
                 return error.cantOpenOutputFiles;
             }
 
@@ -82,6 +96,8 @@ pub const ProcessStatus = struct {
                 return error.Dup2Failed;
             }
 
+            // std.log.err("execve failed", .{});
+            // std.prin
             _ = std.c.execve(path, argv, std.c.environ);
             std.log.err("execve failed", .{});
             std.process.exit(1);
@@ -98,6 +114,7 @@ pub const ProcessStatus = struct {
         _ = self;
         _ = allocator;
 
+        try log.time();
         std.debug.print("{s}[{s}+{s}]{s} #{d} {s}\n", .{
             Color.gray,  Color.green, Color.gray,
             Color.reset, nproc,       program.config.name,
@@ -107,6 +124,7 @@ pub const ProcessStatus = struct {
     pub fn logExit(self: *ProcessStatus, allocator: std.mem.Allocator, program: *Program, nproc: usize) !void {
         _ = allocator;
 
+        try log.time();
         std.debug.print("{s}[{s}-{s}]{s} {s} #{d} {s} has exited with status code {s}{d}{s}\n", .{
             Color.gray,          Color.red,   Color.gray, Color.reset,
             program.config.name, nproc,       Color.gray, Color.green,
@@ -213,6 +231,8 @@ pub fn ForEachProcess(self: *Program, allocator: std.mem.Allocator, comptime fun
 }
 
 pub fn startAllProcess(self: *Program, allocator: std.mem.Allocator) !void {
-    std.debug.print("{s}: starting {d} process\n", .{ self.config.name, self.config.numprocs });
+    try log.time();
+    try log.file.print("{s}: starting {d} process\n", .{ self.config.name, self.config.numprocs });
+    // std.debug.print("{s}: starting {d} process\n", .{ self.config.name, self.config.numprocs });
     try self.ForEachProcess(allocator, ProcessStatus.startProcess);
 }
