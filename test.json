@@ -5,21 +5,27 @@
             "numprocs": "1",
             "stdout": "/tmp/bash_stdout_test.log",
             "stderr": "/tmp/bash_stderr_test.log",
-            "autostart": false
+            "autostart": false,
+            "autorestart": "unexpected",
+            "exitcodes": [0, 2]
         },
         "42i": {
             "cmd": "/usr/bin/echo Je suis Warren",
             "numprocs": "1",
             "stdout": "/tmp/42i_stdout_test.log",
             "stderr": "/tmp/42i_stderr_test.log",
-            "autostart": false
+            "autostart": false,
+            "autorestart": "unexpected",
+            "exitcodes": [0, 2]
         },
         "sleep": {
-            "cmd": "/bin/sleep 1",
+            "cmd": "/bin/sleep 10",
             "numprocs": "3",
             "stdout": "/tmp/sleep_stdout_test.log",
             "stderr": "/tmp/sleep_stderr_test.log",
-            "autostart": true
+            "autostart": true,
+            "autorestart": "unexpected",
+            "exitcodes": [0, 2]
         }
     }
 }

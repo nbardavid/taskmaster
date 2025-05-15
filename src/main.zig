@@ -8,6 +8,7 @@ const c = @cImport({
     @cInclude("sys/wait.h");
     @cInclude("unistd.h");
     @cInclude("fcntl.h");
+    @cInclude("poll.h");
     @cInclude("signal.h");
 });
 
@@ -22,9 +23,11 @@ var g_configParser_ptr: *ConfigParser = undefined;
 const commandEnum = enum {
     config,
     start,
+    stop,
     help,
     reload,
     ls,
+    logs,
 };
 
 fn openLogFile(allocator: std.mem.Allocator) !void {
@@ -69,6 +72,9 @@ fn execute(allocator: std.mem.Allocator, configParser: *ConfigParser, string_cmd
     const cmd = it_cmd.next() orelse return {};
     const cmd_enum = std.meta.stringToEnum(commandEnum, cmd) orelse return error.CommandNonExisting;
 
+    configParser.mutex.lock();
+    defer configParser.mutex.unlock();
+
     switch (cmd_enum) {
         .start => {
             if (it_cmd.next()) |arg| {
@@ -89,6 +95,17 @@ fn execute(allocator: std.mem.Allocator, configParser: *ConfigParser, string_cmd
             try configParser.config.ForEachProgram(allocator, Program.logIsRunning);
             // try forEachMapProgram(allocator, configParser.config.programs, logIsProgramRunning);
         },
+        .stop => {
+            if (it_cmd.next()) |arg| {
+                const program_ptr = try getProgramByName(configParser.config, arg);
+                std.debug.print("program: {s}\n", .{program_ptr.config.name});
+                try program_ptr.ForEachProcess(allocator, Program.ProcessStatus.stopProcess);
+            }
+            // try configParser.config.ForEachProgramProcess(allocator, Program.ProcessStatus.startProcess);
+        },
+        .logs => {
+            try tailFollowLogs();
+        },
     }
 }
 
@@ -106,20 +123,19 @@ fn launchAutoStart(allocator: std.mem.Allocator, config: ConfigParser.Config) !v
     try log.file.print("All autostart-enabled programs have been started.\n", .{});
 }
 
-fn supervisor(allocator: std.mem.Allocator, configParser: *ConfigParser) !void {
-    supervisor_pid = c.fork();
-    while (supervisor_pid == 0) {
-        try configParser.config.ForEachProgramProcess(allocator, Program.ProcessStatus.watchMySelf);
-    }
-}
-
 fn shell(allocator: std.mem.Allocator, configParser: *ConfigParser, prompt: []u8) !void {
     var input: [*c]u8 = null;
     try launchAutoStart(allocator, configParser.config);
-    // try supervisor(allocator, configParser);
+
+    configParser.supervisor = try std.Thread.spawn(.{}, ConfigParser.startSupervisor, .{ @as(*ConfigParser, configParser), @as(std.mem.Allocator, allocator) });
 
     while (true) {
-        try configParser.config.ForEachProgramProcess(allocator, Program.ProcessStatus.watchMySelf);
+        // try configParser.config.ForEachProgramProcess(allocator, Program.ProcessStatus.watchMySelf);
+
+        configParser.mutex.lock();
+        std.debug.print("{s}", .{log.buffer.items});
+        log.buffer.clearRetainingCapacity();
+        configParser.mutex.unlock();
 
         input = c.readline(prompt.ptr);
         if (input == null)
@@ -130,7 +146,43 @@ fn shell(allocator: std.mem.Allocator, configParser: *ConfigParser, prompt: []u8
             continue;
         };
     }
-    _ = c.waitpid(supervisor_pid, null, 0);
+
+    configParser.mutex.lock();
+    configParser.stopSupervisor = true;
+    configParser.mutex.unlock();
+    configParser.supervisor.join();
+    // _ = c.waitpid(supervisor_pid, null, 0);
+}
+
+var readLogs = true;
+
+pub fn tailFollowLogs() !void {
+    const file = try std.fs.cwd().openFile("taskmaster.logs", .{});
+    defer file.close();
+
+    var buf: [1024]u8 = undefined;
+    const fd = file.handle;
+
+    var pfd = c.pollfd{
+        .fd = fd,
+        .events = c.POLLIN,
+        .revents = 0,
+    };
+
+    while (readLogs) {
+        const res = c.poll(&pfd, 1, 1000);
+        if (res < 0) return error.PollFailed;
+        if (res == 0) continue;
+
+        if ((pfd.revents & c.POLLIN) != 0) {
+            const read_bytes = try file.read(&buf);
+            if (read_bytes == 0) {
+                std.time.sleep(1e6);
+                continue;
+            }
+            try std.io.getStdOut().writeAll(buf[0..read_bytes]);
+        }
+    }
 }
 
 pub fn main() !void {
@@ -144,26 +196,24 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
-    var sa: c.struct_sigaction = std.mem.zeroes(c.struct_sigaction);
-    sa.__sigaction_handler.sa_handler = reloadOnSighup;
-    sa.sa_flags = 0;
-    _ = c.sigemptyset(&sa.sa_mask);
-
-    if (c.sigaction(c.SIGHUP, &sa, null) != 0) {
-        return error.SignalSetupFailed;
-    }
 
     if (args.len > 1) {
+        var sa: c.struct_sigaction = std.mem.zeroes(c.struct_sigaction);
+        sa.__sigaction_handler.sa_handler = reloadOnSighup;
+        sa.sa_flags = 0;
+        _ = c.sigemptyset(&sa.sa_mask);
+
+        if (c.sigaction(c.SIGHUP, &sa, null) != 0) {
+            return error.SignalSetupFailed;
+        }
         const prompt = try cstrFromzstr(allocator, args[1]);
         defer allocator.free(prompt);
         var configParser = try ConfigParser.init(allocator);
         g_configParser_ptr = &configParser;
         defer configParser.deinit();
 
-        // parse_config_file(allocator, config);
-
-        // _ = process;
-        // var Configs: []Config = parse_Config_file();
+        try log.init(allocator);
+        defer log.deinit();
 
         try shell(allocator, &configParser, prompt);
     }

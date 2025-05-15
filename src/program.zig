@@ -6,9 +6,16 @@ const log = @import("log.zig");
 const c = @cImport({
     @cInclude("readline/readline.h");
     @cInclude("sys/wait.h");
+    @cInclude("signal.h");
     @cInclude("unistd.h");
     @cInclude("fcntl.h");
 });
+
+pub const restartEnum = enum {
+    always,
+    never,
+    unexpected,
+};
 
 fn cstrFromzstr(allocator: std.mem.Allocator, slice: []const u8) ![]u8 {
     const cstring = try allocator.alloc(u8, slice.len + 1);
@@ -26,7 +33,27 @@ pub const ProcessStatus = struct {
     stdout_fd: c_int = -1,
     stdin_fd: c_int = -1,
 
+    pub fn needRestart(self: *ProcessStatus, allocator: std.mem.Allocator, program: *Program, nproc: usize) !bool {
+        _ = allocator;
+        _ = nproc;
+
+        if (program.config.autorestart == restartEnum.never)
+            return false;
+        if (program.config.autorestart == restartEnum.always)
+            return true;
+
+        for (program.config.exitcodes) |exitcode| {
+            if (exitcode == self.exitno)
+                return false;
+        }
+        return true; //restartEnum.unexpected
+    }
+
     pub fn watchMySelf(self: *ProcessStatus, allocator: std.mem.Allocator, program: *Program, nproc: usize) !void {
+        if (self.need_restart == true) {
+            try self.logRestarting(allocator, program, nproc);
+            try self.startProcess(allocator, program, nproc);
+        }
         if (self.running == false) {
             return;
         }
@@ -37,8 +64,19 @@ pub const ProcessStatus = struct {
         }
         if (err > 0) {
             try self.logExit(allocator, program, nproc);
+            self.need_restart = self.needRestart(allocator, program, nproc);
+
             program.nprocess_running -= 1;
             self.running = false;
+        }
+    }
+
+    pub fn stopProcess(self: *ProcessStatus, allocator: std.mem.Allocator, program: *Program, nproc: usize) !void {
+        _ = allocator;
+        if (self.running == true) {
+            _ = c.kill(self.pid, c.SIGTERM);
+            try log.time();
+            try log.file.print("Sending SIGTERM to {s} #{d}\n", .{ program.config.name, nproc });
         }
     }
 
@@ -73,12 +111,6 @@ pub const ProcessStatus = struct {
         const pid = std.c.fork();
 
         if (pid == 0) {
-            std.debug.print("argv:\n", .{});
-            var i: usize = 0;
-            while (argv_list.items[i] != null) : (i += 1) {
-                std.debug.print("  argv[{d}] = '{?s}'\n", .{ i, argv_list.items[i] });
-            }
-
             const path = @as([*:0]const u8, @ptrCast(argv_list.items[0]));
             const argv = @as([*:null]const ?[*:0]const u8, @ptrCast(argv_list.items.ptr));
 
@@ -114,20 +146,34 @@ pub const ProcessStatus = struct {
         _ = self;
         _ = allocator;
 
-        try log.time();
-        std.debug.print("{s}[{s}+{s}]{s} #{d} {s}\n", .{
+        try log.logBoth("{s}[{s}+{s}]{s} #{d} {s}\n", .{
             Color.gray,  Color.green, Color.gray,
             Color.reset, nproc,       program.config.name,
         });
+    }
+    pub fn logRestarting(self: *ProcessStatus, allocator: std.mem.Allocator, program: *Program, nproc: usize) !void {
+        _ = self;
+        _ = allocator;
+
+        try log.logBoth("Restarting {s} #{d}\n", .{ program.config.name, nproc });
     }
 
     pub fn logExit(self: *ProcessStatus, allocator: std.mem.Allocator, program: *Program, nproc: usize) !void {
         _ = allocator;
 
-        try log.time();
-        std.debug.print("{s}[{s}-{s}]{s} {s} #{d} {s} has exited with status code {s}{d}{s}\n", .{
+        for (program.config.exitcodes) |exitcode| {
+            if (exitcode == self.exitno) {
+                try log.logBoth("{s}[{s}-{s}]{s} {s} #{d} {s} has exited successfully with status code {s}{d}{s}\n", .{
+                    Color.gray,          Color.red,   Color.gray, Color.reset,
+                    program.config.name, nproc,       Color.gray, Color.green,
+                    self.exitno,         Color.reset,
+                });
+                return;
+            }
+        }
+        try log.logBoth("{s}[{s}-{s}]{s} {s} #{d} {s} has exited unexpectedlly with status code {s}{d}{s}\n", .{
             Color.gray,          Color.red,   Color.gray, Color.reset,
-            program.config.name, nproc,       Color.gray, Color.green,
+            program.config.name, nproc,       Color.gray, Color.red,
             self.exitno,         Color.reset,
         });
     }
@@ -140,12 +186,22 @@ pub const ProgramConfig = struct {
     stderr: []const u8,
     numprocs: u32 = 1,
     autostart: bool = false,
+    exitcodes: []const i32 = &[_]i32{0},
+    autorestart: restartEnum,
 };
 
 config: ProgramConfig,
 process: std.ArrayList(ProcessStatus) = undefined,
 hash: u64 = 0,
 nprocess_running: u32 = 0,
+
+pub fn deinit(self: *Program, allocator: std.mem.Allocator) void {
+    allocator.free(self.config.name);
+    allocator.free(self.config.cmd);
+    allocator.free(self.config.stdout);
+    allocator.free(self.config.stderr);
+    allocator.free(self.config.exitcodes);
+}
 
 pub fn computeHash(self: *Program) u64 {
     var hasher = std.hash.Wyhash.init(0);
@@ -171,55 +227,43 @@ pub fn clone(self: Program, allocator: std.mem.Allocator) !Program {
     return new_program;
 }
 
-pub fn format(self: *const Program, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+pub fn format(
+    self: *const Program,
+    comptime fmt: []const u8,
+    _: std.fmt.FormatOptions,
+    writer: anytype,
+) !void {
     _ = fmt;
-    try writer.print("===== Config =====\n", .{});
-    try writer.print("name: {s}\ncmd: {s}\nstdout: {s}\nstderr: {s}\n", .{ self.config.name, self.config.cmd, self.config.stdout, self.config.stderr });
-    // try writer.print("===== Status =====\n", .{});
-    // try writer.print(
-    //     \\hash: {d}
-    //     \\need_restart: {}
-    //     \\pid: {d}
-    //     \\running: {}
-    //     \\nstart: {}
-    //     \\exitno: {d}
-    //     \\stdout_fd: {d}
-    //     \\stdin_fd: {d}
-    //     \\
-    // ,
-    //     .{
-    //         self.status.hash,
-    //         self.status.need_restart,
-    //         self.status.pid,
-    //         self.status.running,
-    //         self.status.nstart,
-    //         self.status.exitno,
-    //         self.status.stdout_fd,
-    //         self.status.stdin_fd,
-    //     },
-    // );
-}
 
-pub fn logProgramStart(self: Program, nproc: u32) void {
-    std.log.info("{s}[{s}+{s}]{s} {s}:{d}", .{
-        Color.gray,  Color.green,      Color.gray,
-        Color.reset, self.config.name, nproc,
-    });
+    try writer.print("===== Config =====\n", .{});
+    try writer.print("name      : {s}\n", .{self.config.name});
+    try writer.print("cmd       : {s}\n", .{self.config.cmd});
+    try writer.print("stdout    : {s}\n", .{self.config.stdout});
+    try writer.print("stderr    : {s}\n", .{self.config.stderr});
+    try writer.print("numprocs  : {d}\n", .{self.config.numprocs});
+    try writer.print("autostart : {}\n", .{self.config.autostart});
+
+    try writer.print("exitcodes : ", .{});
+    for (self.config.exitcodes, 0..) |code, i| {
+        if (i != 0) try writer.print(", ", .{});
+        try writer.print("{}", .{code});
+    }
+    try writer.print("\n", .{});
 }
 
 pub fn logIsRunning(self: *Program, allocator: std.mem.Allocator) !void {
     _ = allocator;
-    std.debug.print("Program: {s} has {d}/{d} process running\n", .{ self.config.name, self.nprocess_running, self.config.numprocs });
+    try log.logBuffer("Program: {s} has {d}/{d} process running\n", .{ self.config.name, self.nprocess_running, self.config.numprocs });
     for (self.process.items, 0..) |process, i| {
         if (i == self.config.numprocs - 1) {
-            std.debug.print("╰ ", .{});
+            try log.logBuffer("╰ ", .{});
         } else {
-            std.debug.print("├ ", .{});
+            try log.logBuffer("├ ", .{});
         }
         if (process.running) {
-            std.debug.print("#{d}: {s}running{s}\n", .{ i, Color.green, Color.reset });
+            try log.logBuffer("#{d}: {s}running{s}\n", .{ i, Color.green, Color.reset });
         } else {
-            std.debug.print("#{d}: {s}stopped{s}\n", .{ i, Color.red, Color.reset });
+            try log.logBuffer("#{d}: {s}stopped{s}\n", .{ i, Color.red, Color.reset });
         }
     }
 }
@@ -231,8 +275,10 @@ pub fn ForEachProcess(self: *Program, allocator: std.mem.Allocator, comptime fun
 }
 
 pub fn startAllProcess(self: *Program, allocator: std.mem.Allocator) !void {
-    try log.time();
-    try log.file.print("{s}: starting {d} process\n", .{ self.config.name, self.config.numprocs });
-    // std.debug.print("{s}: starting {d} process\n", .{ self.config.name, self.config.numprocs });
+    if (self.nprocess_running > 0) {
+        try log.logBuffer("{s}There are {d} processes still running; stop them before starting new ones.{s}\n", .{ Color.red, self.nprocess_running, Color.reset });
+        return;
+    }
+    try log.logBoth("{s}: starting {d} process\n", .{ self.config.name, self.config.numprocs - self.nprocess_running });
     try self.ForEachProcess(allocator, ProcessStatus.startProcess);
 }

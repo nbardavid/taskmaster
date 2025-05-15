@@ -9,24 +9,52 @@ const c = @cImport({
 const Color = @import("color.zig");
 const Program = @import("program.zig");
 
+pub var mutex: std.Thread.Mutex = std.Thread.Mutex{};
 pub var file: std.fs.File.Writer = undefined;
+pub var buffer: std.ArrayList(u8) = undefined;
+pub var buffer_write: std.ArrayList(u8).Writer = undefined;
 
-pub fn programExit(name: []const u8, exit_code: i32) void {
-    log.time();
-    file.print("{s}[{s}-{s}]{s} {s}{s}{s} has exited with status code {s}{d}{s}", .{
-        Color.gray,  Color.red,   Color.gray, Color.reset,
-        Color.reset, name,        Color.gray, Color.green,
-        exit_code,   Color.reset,
-    });
+pub fn init(allocator: std.mem.Allocator) !void {
+    buffer = try std.ArrayList(u8).initCapacity(allocator, 512);
+    buffer_write = buffer.writer();
 }
 
-pub fn programStart(name: []const u8) void {
-    log.time();
-    file.print("{s}[{s}+{s}]{s} {s}", .{
-        Color.gray,  Color.green, Color.gray,
-        Color.reset, name,
-    });
+pub fn deinit() void {
+    buffer.deinit();
 }
+
+pub fn logBuffer(comptime fmt: []const u8, args: anytype) !void {
+    mutex.lock();
+    try buffer_write.print(fmt, args);
+    mutex.unlock();
+}
+
+pub fn logFile(comptime fmt: []const u8, args: anytype) !void {
+    try log.time();
+    try file.print(fmt, args);
+}
+
+pub fn logBoth(comptime fmt: []const u8, args: anytype) !void {
+    try logFile(fmt, args);
+    try logBuffer(fmt, args);
+}
+
+// pub fn programExit(name: []const u8, exit_code: i32) void {
+//     log.time();
+//     file.print("{s}[{s}-{s}]{s} {s}{s}{s} has exited with status code {s}{d}{s}", .{
+//         Color.gray,  Color.red,   Color.gray, Color.reset,
+//         Color.reset, name,        Color.gray, Color.green,
+//         exit_code,   Color.reset,
+//     });
+// }
+//
+// pub fn programStart(name: []const u8) void {
+//     log.time();
+//     file.print("{s}[{s}+{s}]{s} {s}", .{
+//         Color.gray,  Color.green, Color.gray,
+//         Color.reset, name,
+//     });
+// }
 
 pub fn isProgramRunning(alloc: std.mem.Allocator, program: *Program) !void {
     _ = alloc;

@@ -11,7 +11,9 @@ pub const ProgramJson = struct {
     stdout: []u8,
     stderr: []u8,
     numprocs: u32,
+    autorestart: []u8 = "never",
     autostart: bool = false,
+    exitcodes: []const i32 = &[_]i32{0},
 };
 
 pub const Config = struct {
@@ -31,32 +33,34 @@ pub const Config = struct {
             try function(program, allocator);
         }
     }
-
     //function (allocator, program, process, nproc);
     pub fn ForEachProgramProcess(self: Config, allocator: std.mem.Allocator, comptime function: fn (*Program.ProcessStatus, std.mem.Allocator, *Program, usize) anyerror!void) !void {
         for (self.programs.items) |*program| {
             try program.ForEachProcess(allocator, function);
         }
     }
-
-    // fn watchProgram(alloc: std.mem.Allocator, program: *ConfigParser.Program) !void {
-    //     if (program.status.running == false) {
-    //         return;
-    //     } else if (c.waitpid(program.status.pid, &program.status.exitno, c.WNOHANG) != 0) {
-    //         logProgramExit(program.config.name, program.status.exitno);
-    //         program.status.running = false;
-    //     } else if (program.status.need_restart) {
-    //         try start(alloc, program);
-    //     }
-    // }
-    // pub fn updateStatusAndLog(self: *Config){
-    //
-    // }
 };
 
 alloc: std.mem.Allocator,
 config: Config,
 nprocess_running: u32 = 0,
+mutex: std.Thread.Mutex = std.Thread.Mutex{},
+supervisor: std.Thread = undefined,
+stopSupervisor: bool = false,
+
+pub fn startSupervisor(self: *ConfigParser, allocator: std.mem.Allocator) !void {
+    while (true) {
+        self.mutex.lock();
+
+        try self.config.ForEachProgramProcess(allocator, Program.ProcessStatus.watchMySelf);
+        if (self.stopSupervisor == true) {
+            self.mutex.unlock();
+            break;
+        }
+        self.mutex.unlock();
+        std.time.sleep(1e6);
+    }
+}
 
 pub fn init(alloc: std.mem.Allocator) !ConfigParser {
     const parsed_programs = try parse(alloc);
@@ -69,11 +73,8 @@ pub fn init(alloc: std.mem.Allocator) !ConfigParser {
 }
 
 pub fn deinit(self: *ConfigParser) void {
-    for (self.config.programs.items) |program| {
-        self.alloc.free(program.config.name);
-        self.alloc.free(program.config.cmd);
-        self.alloc.free(program.config.stdout);
-        self.alloc.free(program.config.stderr);
+    for (self.config.programs.items) |*program| {
+        program.deinit(self.alloc);
         program.process.deinit();
     }
     self.config.programs.deinit();
@@ -105,20 +106,12 @@ pub fn update(self: *ConfigParser) !void {
             try programs.append(try old_program.clone(self.alloc)); //DOIT CLONE POUR FREE LE RESTE FACILEMENT
         }
     }
-    for (self.config.programs.items) |program| {
-        self.alloc.free(program.config.name);
-        self.alloc.free(program.config.cmd);
-        self.alloc.free(program.config.stdout);
-        self.alloc.free(program.config.stderr);
-    }
+    for (self.config.programs.items) |*program|
+        program.deinit(self.alloc);
     self.config.programs.deinit();
 
-    for (new_config.items) |program| {
-        self.alloc.free(program.config.name);
-        self.alloc.free(program.config.cmd);
-        self.alloc.free(program.config.stdout);
-        self.alloc.free(program.config.stderr);
-    }
+    for (new_config.items) |*program|
+        program.deinit(self.alloc);
     new_config.deinit();
 
     self.config.programs = programs;
@@ -158,6 +151,8 @@ pub fn parse(allocator: std.mem.Allocator) !std.ArrayList(Program) {
                 .stdout = try allocator.dupe(u8, parsed_program.value.stdout),
                 .numprocs = parsed_program.value.numprocs,
                 .autostart = parsed_program.value.autostart,
+                .exitcodes = try allocator.dupe(i32, parsed_program.value.exitcodes),
+                .autorestart = std.meta.stringToEnum(Program.restartEnum, parsed_program.value.autorestart) orelse return error.InvalidValueAutoRestart,
             },
             .process = std.ArrayList(Program.ProcessStatus).init(allocator),
         };
