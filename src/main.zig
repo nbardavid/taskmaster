@@ -12,6 +12,7 @@ const c = @cImport({
     @cInclude("signal.h");
 });
 
+const ProcessStatus = @import("process.zig");
 const ConfigParser = @import("config.zig");
 const Program = @import("program.zig");
 const Color = @import("color.zig");
@@ -99,9 +100,9 @@ fn execute(allocator: std.mem.Allocator, configParser: *ConfigParser, string_cmd
             if (it_cmd.next()) |arg| {
                 const program_ptr = try getProgramByName(configParser.config, arg);
                 std.debug.print("program: {s}\n", .{program_ptr.config.name});
-                try program_ptr.ForEachProcess(allocator, Program.ProcessStatus.stopProcess);
+                try program_ptr.ForEachProcess(allocator, ProcessStatus.stopProcess);
             }
-            // try configParser.config.ForEachProgramProcess(allocator, Program.ProcessStatus.startProcess);
+            // try configParser.config.ForEachProgramProcess(allocator, ProcessStatus.startProcess);
         },
         .logs => {
             try tailFollowLogs();
@@ -130,7 +131,7 @@ fn shell(allocator: std.mem.Allocator, configParser: *ConfigParser, prompt: []u8
     configParser.supervisor = try std.Thread.spawn(.{}, ConfigParser.startSupervisor, .{ @as(*ConfigParser, configParser), @as(std.mem.Allocator, allocator) });
 
     while (true) {
-        // try configParser.config.ForEachProgramProcess(allocator, Program.ProcessStatus.watchMySelf);
+        // try configParser.config.ForEachProgramProcess(allocator, ProcessStatus.watchMySelf);
 
         configParser.mutex.lock();
         std.debug.print("{s}", .{log.buffer.items});

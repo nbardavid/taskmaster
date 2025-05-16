@@ -1,6 +1,7 @@
 const std = @import("std");
 const ConfigParser = @This();
 const Program = @import("program.zig");
+const ProcessStatus = @import("process.zig");
 
 // var buffer: [512]u8 = .{0} ** 512;
 // const stream = std.io.fixedBufferStream(&buffer);
@@ -11,9 +12,12 @@ pub const ProgramJson = struct {
     stdout: []u8,
     stderr: []u8,
     numprocs: u32,
-    autorestart: []u8 = "never",
+    autorestart: []u8,
     autostart: bool = false,
+    starttime: u32 = 0,
+    stoptime: u32 = 0,
     exitcodes: []const i32 = &[_]i32{0},
+    startretries: u32 = 0,
 };
 
 pub const Config = struct {
@@ -34,7 +38,7 @@ pub const Config = struct {
         }
     }
     //function (allocator, program, process, nproc);
-    pub fn ForEachProgramProcess(self: Config, allocator: std.mem.Allocator, comptime function: fn (*Program.ProcessStatus, std.mem.Allocator, *Program, usize) anyerror!void) !void {
+    pub fn ForEachProgramProcess(self: Config, allocator: std.mem.Allocator, comptime function: fn (*ProcessStatus, std.mem.Allocator, *Program, usize) anyerror!void) !void {
         for (self.programs.items) |*program| {
             try program.ForEachProcess(allocator, function);
         }
@@ -52,7 +56,7 @@ pub fn startSupervisor(self: *ConfigParser, allocator: std.mem.Allocator) !void 
     while (true) {
         self.mutex.lock();
 
-        try self.config.ForEachProgramProcess(allocator, Program.ProcessStatus.watchMySelf);
+        try self.config.ForEachProgramProcess(allocator, ProcessStatus.watchMySelf);
         if (self.stopSupervisor == true) {
             self.mutex.unlock();
             break;
@@ -153,15 +157,18 @@ pub fn parse(allocator: std.mem.Allocator) !std.ArrayList(Program) {
                 .autostart = parsed_program.value.autostart,
                 .exitcodes = try allocator.dupe(i32, parsed_program.value.exitcodes),
                 .autorestart = std.meta.stringToEnum(Program.restartEnum, parsed_program.value.autorestart) orelse return error.InvalidValueAutoRestart,
+                .starttime = parsed_program.value.starttime,
+                .startretries = parsed_program.value.startretries,
+                .stoptime = parsed_program.value.stoptime,
             },
-            .process = std.ArrayList(Program.ProcessStatus).init(allocator),
+            .process = std.ArrayList(ProcessStatus).init(allocator),
         };
 
         for (0..new_program.config.numprocs) |_| {
-            try new_program.process.append(Program.ProcessStatus{});
+            try new_program.process.append(ProcessStatus{});
         }
 
-        // try new_program.process.append(Program.ProcessStatus{});
+        // try new_program.process.append(ProcessStatus{});
 
         new_program.hash = new_program.computeHash();
 
