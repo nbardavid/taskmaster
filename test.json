@@ -1,37 +1,21 @@
 {
     "programs": {
-        "bash": {
-            "cmd": "/bin/bash",
-            "numprocs": "1",
-            "stdout": "/tmp/bash_stdout_test.log",
-            "stderr": "/tmp/bash_stderr_test.log",
-            "autostart": false,
-            "autorestart": "unexpected",
-            "exitcodes": [0, 2, 15]
-        },
-        "42i": {
-            "cmd": "/usr/bin/echo Je suis Warren",
-            "numprocs": "1",
-            "stdout": "/tmp/42i_stdout_test.log",
-            "stderr": "/tmp/42i_stderr_test.log",
-            "autostart": false,
-            "autorestart": "unexpected",
-            "exitcodes": [0, 2, 15]
-        },
         "sleep": {
-            "cmd": "/bin/sleep 1",
-            "numprocs": "3",
+            "cmd": "/bin/sleep 5",
+            "numprocs": 3,
             "stdout": "/tmp/sleep_stdout_test.log",
             "stderr": "/tmp/sleep_stderr_test.log",
             "autostart": true,
-            "autorestart": "unexpected",
+            "autorestart": "never",
             "exitcodes": [0, 2, 15],
             "starttime": 3,
-            "startretries": 3
+            "startretries": 3,
+            "stoptime": 3,
+            "stopsignal": "KILL"
         },
         "ignore": {
             "cmd": "./ignore_sigterm",
-            "numprocs": "1",
+            "numprocs": 1,
             "stdout": "/tmp/ignore_stdout_test.log",
             "stderr": "/tmp/ignore_stderr_test.log",
             "autostart": false,
@@ -39,7 +23,8 @@
             "exitcodes": [0, 2, 15],
             "starttime": 0,
             "startretries": 0,
-            "stoptime": 3
+            "stoptime": 3,
+            "stopsignal": "KILL"
         }
     }
 }

@@ -2,6 +2,7 @@ const std = @import("std");
 const ConfigParser = @This();
 const Program = @import("program.zig");
 const ProcessStatus = @import("process.zig");
+const Signal = @import("signal.zig");
 
 // var buffer: [512]u8 = .{0} ** 512;
 // const stream = std.io.fixedBufferStream(&buffer);
@@ -18,6 +19,8 @@ pub const ProgramJson = struct {
     stoptime: u32 = 0,
     exitcodes: []const i32 = &[_]i32{0},
     startretries: u32 = 0,
+    stopsignal: []const u8 = "TERM",
+    umask: u32 = 22,
 };
 
 pub const Config = struct {
@@ -79,7 +82,6 @@ pub fn init(alloc: std.mem.Allocator) !ConfigParser {
 pub fn deinit(self: *ConfigParser) void {
     for (self.config.programs.items) |*program| {
         program.deinit(self.alloc);
-        program.process.deinit();
     }
     self.config.programs.deinit();
 }
@@ -94,8 +96,9 @@ pub fn getProgramByName(self: ConfigParser, name: []const u8) !*ConfigParser.Pro
 }
 
 pub fn update(self: *ConfigParser) !void {
-    const new_config = try parse(self.alloc);
-
+    const new_config = parse(self.alloc) catch {
+        return;
+    };
     var programs = std.ArrayList(Program).init(self.alloc);
     for (new_config.items) |*program| {
         const old_program = self.getProgramByName(program.config.name) catch {
@@ -144,7 +147,14 @@ pub fn parse(allocator: std.mem.Allocator) !std.ArrayList(Program) {
         const name = entry.key_ptr.*;
         const json_program = entry.value_ptr.*;
 
-        const parsed_program = try std.json.parseFromValue(ProgramJson, allocator, json_program, .{});
+        const parsed_program = std.json.parseFromValue(ProgramJson, allocator, json_program, .{}) catch |e| {
+            std.log.err("Invalid json config: {}", .{e});
+            for (new_programs.items) |*program| {
+                program.deinit(new_programs.allocator);
+            }
+            new_programs.deinit();
+            return e;
+        };
         defer parsed_program.deinit();
 
         var new_program = Program{
@@ -160,6 +170,8 @@ pub fn parse(allocator: std.mem.Allocator) !std.ArrayList(Program) {
                 .starttime = parsed_program.value.starttime,
                 .startretries = parsed_program.value.startretries,
                 .stoptime = parsed_program.value.stoptime,
+                .stopsignal = Signal.stringToSignal(parsed_program.value.stopsignal) orelse return error.InvalidValueStopSignal,
+                .umask = parsed_program.value.umask,
             },
             .process = std.ArrayList(ProcessStatus).init(allocator),
         };

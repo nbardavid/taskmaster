@@ -3,6 +3,7 @@ const std = @import("std");
 const Color = @import("color.zig");
 const log = @import("log.zig");
 const Program = @import("program.zig");
+const Signal = @import("signal.zig");
 
 const c = @cImport({
     @cInclude("readline/readline.h");
@@ -10,6 +11,7 @@ const c = @cImport({
     @cInclude("signal.h");
     @cInclude("unistd.h");
     @cInclude("fcntl.h");
+    @cInclude("sys/stat.h");
 });
 
 pub const StatusEnum = enum {
@@ -56,8 +58,8 @@ fn watchStarting(self: *ProcessStatus, allocator: std.mem.Allocator, program: *P
     if (self.status == StatusEnum.starting and program.config.starttime > 0) {
         const time_in_seconds = self.time_since_started.read() / @as(u64, @intFromFloat(@as(f64, 1_000_000_000.0)));
         if (time_in_seconds >= program.config.starttime) {
+            self.status = StatusEnum.running;
             try self.logStart(allocator, program, nproc);
-            self.status = StatusEnum.stopped;
             return;
         }
     }
@@ -106,9 +108,9 @@ pub fn watchMySelf(self: *ProcessStatus, allocator: std.mem.Allocator, program: 
 pub fn stopProcess(self: *ProcessStatus, allocator: std.mem.Allocator, program: *Program, nproc: usize) !void {
     _ = allocator;
     if (self.status == StatusEnum.starting or self.status == StatusEnum.running) {
-        _ = c.kill(self.pid, c.SIGTERM);
+        _ = c.kill(self.pid, program.config.stopsignal);
         try log.time();
-        try log.file.print("Sending SIGTERM to {s} #{d}\n", .{ program.config.name, nproc });
+        try log.file.print("Sending signal {d} to {s} #{d}\n", .{ program.config.stopsignal, program.config.name, nproc });
         self.status = StatusEnum.stopping;
         self.time_since_stopping = try std.time.Timer.start();
     }
@@ -174,6 +176,8 @@ pub fn startProcess(self: *ProcessStatus, allocator: std.mem.Allocator, program:
 
         // std.log.err("execve failed", .{});
         // std.prin
+        //
+        _ = c.umask(program.config.umask);
         _ = std.c.execve(path, argv, std.c.environ);
         std.log.err("execve failed", .{});
         std.process.exit(1);

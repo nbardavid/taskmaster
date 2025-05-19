@@ -4,6 +4,7 @@ const Color = @import("color.zig");
 const log = @import("log.zig");
 const ProcessStatus = @import("process.zig");
 const StatusEnum = ProcessStatus.StatusEnum;
+const Signal = @import("signal.zig");
 
 const c = @cImport({
     @cInclude("readline/readline.h");
@@ -11,6 +12,7 @@ const c = @cImport({
     @cInclude("signal.h");
     @cInclude("unistd.h");
     @cInclude("fcntl.h");
+    @cInclude("sys/stat.h");
 });
 
 config: ProgramConfig,
@@ -42,6 +44,8 @@ pub const ProgramConfig = struct {
     starttime: u32 = 0,
     stoptime: u32 = 0,
     startretries: u32 = 0,
+    stopsignal: i32 = 15,
+    umask: u32 = 22,
 };
 
 pub fn deinit(self: *Program, allocator: std.mem.Allocator) void {
@@ -50,6 +54,7 @@ pub fn deinit(self: *Program, allocator: std.mem.Allocator) void {
     allocator.free(self.config.stdout);
     allocator.free(self.config.stderr);
     allocator.free(self.config.exitcodes);
+    self.process.deinit();
 }
 
 pub fn computeHash(self: *Program) u64 {
@@ -84,6 +89,8 @@ pub fn clone(self: Program, allocator: std.mem.Allocator) !Program {
             .starttime = self.config.starttime,
             .startretries = self.config.startretries,
             .stoptime = self.config.stoptime,
+            .stopsignal = self.config.stopsignal,
+            .umask = self.config.umask,
         },
         .process = try self.process.clone(),
     };
