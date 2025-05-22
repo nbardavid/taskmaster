@@ -145,7 +145,7 @@ fn shell(allocator: std.mem.Allocator, configParser: *ConfigParser, prompt: []u8
             break;
 
         c.add_history(input);
-        history.file.print("{s}\n", input);
+        try history.file.print("{s}\n", input);
 
         execute(allocator, configParser, sliceFromCstr(input)) catch |e| {
             std.log.err("{!}", .{e});
@@ -200,7 +200,7 @@ pub fn main() !void {
     defer file.close();
     log.file = file.writer();
 
-    history.init();
+    try history.init();
 
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
