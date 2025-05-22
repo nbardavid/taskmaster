@@ -21,6 +21,7 @@ pub const ProgramJson = struct {
     startretries: u32 = 0,
     stopsignal: []const u8 = "TERM",
     umask: u32 = 22,
+    workingdir: []const u8,
 };
 
 pub const Config = struct {
@@ -163,6 +164,7 @@ pub fn parse(allocator: std.mem.Allocator) !std.ArrayList(Program) {
                 .cmd = try allocator.dupe(u8, parsed_program.value.cmd),
                 .stderr = try allocator.dupe(u8, parsed_program.value.stderr),
                 .stdout = try allocator.dupe(u8, parsed_program.value.stdout),
+                .workingdir = try allocator.dupe(u8, parsed_program.value.workingdir),
                 .numprocs = parsed_program.value.numprocs,
                 .autostart = parsed_program.value.autostart,
                 .exitcodes = try allocator.dupe(i32, parsed_program.value.exitcodes),

@@ -37,6 +37,7 @@ pub const ProgramConfig = struct {
     cmd: []const u8,
     stdout: []const u8,
     stderr: []const u8,
+    workingdir: []const u8,
     numprocs: u32 = 1,
     autostart: bool = false,
     exitcodes: []const i32 = &[_]i32{0},
@@ -54,6 +55,7 @@ pub fn deinit(self: *Program, allocator: std.mem.Allocator) void {
     allocator.free(self.config.stdout);
     allocator.free(self.config.stderr);
     allocator.free(self.config.exitcodes);
+    allocator.free(self.config.workingdir);
     self.process.deinit();
 }
 
@@ -91,6 +93,7 @@ pub fn clone(self: Program, allocator: std.mem.Allocator) !Program {
             .stoptime = self.config.stoptime,
             .stopsignal = self.config.stopsignal,
             .umask = self.config.umask,
+            .workingdir = self.config.workingdir,
         },
         .process = try self.process.clone(),
     };

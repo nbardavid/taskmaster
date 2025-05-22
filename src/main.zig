@@ -10,6 +10,7 @@ const c = @cImport({
     @cInclude("fcntl.h");
     @cInclude("poll.h");
     @cInclude("signal.h");
+    @cInclude("readline/history.h");
 });
 
 const ProcessStatus = @import("process.zig");
@@ -17,6 +18,7 @@ const ConfigParser = @import("config.zig");
 const Program = @import("program.zig");
 const Color = @import("color.zig");
 const log = @import("log.zig");
+const history = @import("history.zig");
 
 var supervisor_pid: c_int = undefined;
 var g_configParser_ptr: *ConfigParser = undefined;
@@ -142,6 +144,9 @@ fn shell(allocator: std.mem.Allocator, configParser: *ConfigParser, prompt: []u8
         if (input == null)
             break;
 
+        c.add_history(input);
+        history.file.print("{s}\n", input);
+
         execute(allocator, configParser, sliceFromCstr(input)) catch |e| {
             std.log.err("{!}", .{e});
             continue;
@@ -194,6 +199,8 @@ pub fn main() !void {
     const file = try std.fs.cwd().createFile("taskmaster.logs", .{ .read = false });
     defer file.close();
     log.file = file.writer();
+
+    history.init();
 
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);

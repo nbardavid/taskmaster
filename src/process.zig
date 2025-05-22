@@ -12,6 +12,7 @@ const c = @cImport({
     @cInclude("unistd.h");
     @cInclude("fcntl.h");
     @cInclude("sys/stat.h");
+    @cInclude("unistd.h");
 });
 
 pub const StatusEnum = enum {
@@ -34,6 +35,13 @@ stdout_fd: c_int = -1,
 stdin_fd: c_int = -1,
 time_since_started: std.time.Timer = undefined,
 time_since_stopping: std.time.Timer = undefined,
+
+fn cstrFromzstr(allocator: std.mem.Allocator, slice: []const u8) ![]u8 {
+    const cstring = try allocator.alloc(u8, slice.len + 1);
+    @memcpy(cstring[0..slice.len], slice);
+    cstring[slice.len] = 0;
+    return cstring;
+}
 
 pub fn needRestart(self: *ProcessStatus, allocator: std.mem.Allocator, program: *Program, nproc: usize) !bool {
     _ = allocator;
@@ -162,24 +170,24 @@ pub fn startProcess(self: *ProcessStatus, allocator: std.mem.Allocator, program:
 
         const stderr_filename: []u8 = try Program.cstrFromzstr(allocator, program.config.stderr);
         const stdout_filename: []u8 = try Program.cstrFromzstr(allocator, program.config.stdout);
+        const working_dir: []u8 = try Program.cstrFromzstr(allocator, program.config.workingdir);
 
         const stdout_fd: c_int = c.open(stdout_filename.ptr, c.O_WRONLY | c.O_CREAT, @as(c_int, @intCast(0o664)));
         const stderr_fd: c_int = c.open(stderr_filename.ptr, c.O_WRONLY | c.O_CREAT, @as(c_int, @intCast(0o664)));
         if (stdout_fd == -1 or stderr_fd == -1) {
-            std.log.err("cantOpenOutputFiles", .{});
+            try log.logBoth("Error: can't open output files\n", .{});
             return error.cantOpenOutputFiles;
         }
 
         if (std.c.dup2(stdout_fd, std.c.STDOUT_FILENO) == -1 or std.c.dup2(stderr_fd, std.c.STDERR_FILENO) == -1) {
+            try log.logBoth("Error: Dup2 Failed\n", .{});
             return error.Dup2Failed;
         }
 
-        // std.log.err("execve failed", .{});
-        // std.prin
-        //
+        if (c.chdir(@ptrCast(working_dir)) == -1) {}
         _ = c.umask(program.config.umask);
         _ = std.c.execve(path, argv, std.c.environ);
-        std.log.err("execve failed", .{});
+        try log.logBoth("Error: Execve Failed\n", .{});
         std.process.exit(1);
     }
 

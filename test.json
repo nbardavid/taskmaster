@@ -11,7 +11,8 @@
             "starttime": 3,
             "startretries": 3,
             "stoptime": 3,
-            "stopsignal": "KILL"
+            "stopsignal": "KILL",
+            "workingdir": "/tmp/testtest"
         },
         "ignore": {
             "cmd": "./ignore_sigterm",
@@ -24,7 +25,9 @@
             "starttime": 0,
             "startretries": 0,
             "stoptime": 3,
-            "stopsignal": "KILL"
+            "stopsignal": "KILL",
+            "umask": "777",
+            "workingdir": "/tmp/testtest"
         }
     }
 }
