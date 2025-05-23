@@ -25,7 +25,7 @@
             "starttime": 0,
             "startretries": 0,
             "stoptime": 3,
-            "stopsignal": "KILL",
+            "stopsignal": "TERM",
             "umask": "777",
             "workingdir": "/tmp/testtest"
         }
