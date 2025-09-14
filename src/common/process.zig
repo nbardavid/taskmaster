@@ -41,47 +41,10 @@ pub const Signal = enum(i32) {
     }
 
     pub fn stringFromSignal(signal: Signal) []const u8 {
-        return switch (signal) {
-            .block => return "BLOCK",
-            .unblock => return "UNBLOCK",
-            .setmask => return "SETMASK",
-            .hup => return "HUP",
-            .int => return "INT",
-            .quit => return "QUIT",
-            .ill => return "ILL",
-            .trap => return "TRAP",
-            .abrt => return "ABRT",
-            .poll => return "POLL",
-            .iot => return "IOT",
-            .emt => return "EMT",
-            .fpe => return "FPE",
-            .kill => return "KILL",
-            .bus => return "BUS",
-            .segv => return "SEGV",
-            .sys => return "SYS",
-            .pipe => return "PIPE",
-            .alrm => return "ALRM",
-            .term => return "TERM",
-            .urg => return "URG",
-            .stop => return "STOP",
-            .tstp => return "TSTP",
-            .cont => return "CONT",
-            .chld => return "CHLD",
-            .ttin => return "TTIN",
-            .ttou => return "TTOU",
-            .io => return "IO",
-            .xcpu => return "XCPU",
-            .xfsz => return "XFSZ",
-            .vtalrm => return "VTALRM",
-            .prof => return "PROF",
-            .winch => return "WINCH",
-            .info => return "INFO",
-            .usr1 => return "USR1",
-            .usr2 => return "USR2",
-        };
+        return @tagName(signal);
     }
 
-    const signal_from_string: std.StaticEnumMap(Signal) = .initComptime(&.{
+    const signal_from_string: std.StaticStringMap(Signal) = .initComptime(&.{
         .{ "HUP", Signal.hup },
         .{ "INT", Signal.int },
         .{ "TRAP", Signal.trap },
@@ -139,6 +102,29 @@ pub const ExitCode = enum(i32) {
         writer: *std.Io.Writer,
     ) std.Io.Writer.Error!void {
         try writer.print("exit code : {d}", .{self.intFromExitCode()});
+    }
+};
+
+pub const AutoRestart = enum(u8) {
+    always = 0,
+    never = 1,
+    unexpected = 2,
+
+    pub fn autoRestartFromString(string: []const u8) ?AutoRestart {
+        if (std.mem.eql(u8, "always", string)) {
+            return .always;
+        }
+        if (std.mem.eql(u8, "never", string)) {
+            return .never;
+        }
+        if (std.mem.eql(u8, "unexpected", string)) {
+            return .unexpected;
+        }
+        return null;
+    }
+
+    pub fn stringFromAutoRestart(autorestart: AutoRestart) []const u8 {
+        return @tagName(autorestart);
     }
 };
 

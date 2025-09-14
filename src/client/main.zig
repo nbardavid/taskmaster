@@ -7,6 +7,7 @@ const fs = std.fs;
 
 const common = @import("common");
 const Config = common.Config;
+const Client = @import("Client.zig");
 
 pub fn main() !void {
     var gpa_instance: heap.GeneralPurposeAllocator(.{}) = .init;
@@ -23,16 +24,9 @@ pub fn main() !void {
     var file = try cwd.openFile(config_file_path, .{ .mode = .read_only });
     defer file.close();
 
-    var file_buffer: [std.heap.pageSize()]u8 = undefined;
-    var file_reader = file.reader(&file_buffer);
+    var client: Client = .init(gpa, file);
+    defer client.deinit();
 
-    var config: Config = .init(gpa);
-    defer config.deinit();
-
-    const jobs = try config.parse(&file_reader.interface);
-    var it = jobs.programs.map.iterator();
-
-    while (it.next()) |entry| {
-        std.debug.print("{s}:{f}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
-    }
+    try client.parseConfig();
+    try client.printConfig();
 }

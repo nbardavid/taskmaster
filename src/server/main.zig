@@ -6,6 +6,7 @@ const heap = std.heap;
 const proc = std.process;
 const fs = std.fs;
 const Io = std.Io;
+const net = std.net;
 
 const common = @import("common");
 const Config = common.Config;
