@@ -58,16 +58,14 @@ pub fn initServer(self: *Client, address: []const u8, port: u16) !void {
 
 pub fn start(self: *Client) !void {
     var shell = self.shell orelse return error.NoShellDumbass;
-    var server_buffer: [256]u8 = undefined;
+    var server_buffer: [1]u8 = undefined;
     while (true) {
         const line = try shell.readline("taskmaster |> ");
 
         if (self.server) |*connected| {
-            std.debug.print("writing to server\n", .{});
             var server_writer: net.Stream.Writer = connected.writer(&server_buffer);
             var sw: *Io.Writer = &server_writer.interface;
             try sw.writeAll(line);
-            try sw.flush();
         }
 
         if (std.mem.containsAtLeast(u8, line, 1, "quit")) {

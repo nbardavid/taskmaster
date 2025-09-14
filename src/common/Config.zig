@@ -179,7 +179,7 @@ pub const Program = struct {
 
     pub fn format(
         self: @This(),
-        writer: *std.io.Writer,
+        writer: *std.Io.Writer,
     ) !void {
         try writer.print(
             \\Program {{
