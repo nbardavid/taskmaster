@@ -29,4 +29,7 @@ pub fn main() !void {
 
     try client.parseConfig();
     try client.printConfig();
+    try client.initShell();
+    try client.initServer("0.0.0.0", 8383);
+    try client.start();
 }
