@@ -1,17 +1,41 @@
 const Server = @This();
 
 gpa: mem.Allocator,
-address: net.Address,
-sock_path: []const u8,
 bell: std.atomic.Value(bool),
+mailbox: AsyncMailbox,
+config: Config,
+logger: *Logger,
 
-pub fn init(gpa: mem.Allocator, sock_path: []const u8) Server {
+pub fn init(gpa: mem.Allocator) Server {
     return .{
         .gpa = gpa,
         .address = undefined,
-        .sock_path = sock_path,
         .bell = .{ .raw = false },
+        .mailbox = undefined,
+        .config = undefined,
+        .logger = undefined,
     };
+}
+
+fn initLogger(self: *Server, log_file_path: []const u8) !*Logger {
+    const logger: *Logger = try .init(self.gpa, 32);
+    errdefer logger.deinit();
+
+    try logger.start();
+    try logger.addOwnedFileSink(log_file_path);
+    return logger;
+}
+
+fn initConfig(_: *Server, config_file_path: []const u8) !Config {
+    const config: Config = .init();
+    errdefer config.deinit();
+    try config.open(config_file_path);
+}
+
+fn initMailbox(self: *Server, unix_sock_path: []const u8) !AsyncMailbox {
+    const mailbox: AsyncMailbox = .init(unix_sock_path, &self.bell, self.logger);
+    mailbox.thread = Thread.spawn(.{}, AsyncMailbox.start, .{&self.mailbox});
+    return mailbox;
 }
 
 fn checkMailbox(self: *Server, mailbox: *AsyncMailbox, out_command: *common.Command, out_payload: *[256]u8) bool {
@@ -24,96 +48,56 @@ fn checkMailbox(self: *Server, mailbox: *AsyncMailbox, out_command: *common.Comm
     return true;
 }
 
-pub fn start(self: *Server, config_file: std.fs.File) !void {
-    var arena_instance: heap.ArenaAllocator = .init(self.gpa);
-    defer arena_instance.deinit();
-    const arena = arena_instance.allocator();
-
-    var config_file_buffer: [4096]u8 = undefined;
-    var config_file_reader = config_file.reader(&config_file_buffer);
-    const config_reader: *Io.Reader = &config_file_reader.interface;
-    var config: Config = .init(arena);
-
-    var server_mailbox: AsyncMailbox = .init(self.sock_path, &self.bell);
-    var server_mailbox_thread: Thread = undefined;
-    var client_command: common.Command = undefined;
-    var client_command_payload: [256]u8 = undefined;
+pub fn start(self: *Server, log_file_path: []const u8, unix_sock_path: []const u8, config_file_path: []const u8) !void {
     var fatal_error: anyerror = undefined;
 
-    var process_from_name: StringArrayHashMapUnmanaged(Process) = .empty;
-    defer process_from_name.deinit(self.gpa);
-
-    var new_process_from_name: StringArrayHashMapUnmanaged(Process) = .empty;
-    defer new_process_from_name.deinit(arena);
-
-    state: switch (State.server_needs_to_start_mailbox) {
-        .server_needs_to_start_mailbox => {
-            if (Thread.spawn(.{}, AsyncMailbox.start, .{&server_mailbox})) |thread| {
-                server_mailbox_thread = thread;
-                continue :state .server_needs_to_load_config;
+    state: switch (State.server_needs_to_init_logger) {
+        .server_needs_to_init_logger => {
+            if (self.initLogger(log_file_path)) |logger| {
+                self.logger = logger;
+                continue :state .server_needs_to_init_config;
             } else |err| {
                 fatal_error = err;
-                continue :state .server_encountered_fatal_error;
+                continue :state .server_encountered_log_error;
             }
         },
-        .server_needs_to_load_config => {
-            config_file.seekTo(0) catch |err| {
+        .server_needs_to_init_config => {
+            if (self.initConfig(config_file_path)) |config| {
+                self.config = config;
+                continue :state .server_needs_to_init_mailbox;
+            } else |err| {
                 fatal_error = err;
-                continue :state .server_encountered_fatal_error;
-            };
-            continue :state .server_needs_to_parse_config;
-        },
-        .server_needs_to_parse_config => {
-            config.parse(config_reader) catch |err| {
-                fatal_error = err;
-                continue :state .server_encountered_syntax_error;
-            };
-            continue :state .server_needs_to_prepare_config_update;
-        },
-        .server_needs_to_prepare_config_update => {
-            const parsed = config.getParsed();
-            new_process_from_name.ensureUnusedCapacity(self.gpa, parsed.len) catch |err| {
-                fatal_error = err;
-                continue :state .server_encountered_fatal_error;
-            };
-
-            for (parsed) |*program| {
-                const process = Process.init(program, self.gpa, program.hash()) catch |err| {
-                    fatal_error = err;
-                    continue :state .server_encountered_fatal_error;
-                };
-                new_process_from_name.putAssumeCapacity(program.name, process);
+                continue :state .server_encountered_config_error;
             }
         },
-        .server_wait_for_command => {},
-        .server_encountered_syntax_error => {},
-        .server_can_exit_cleanly => {},
-        .server_run_client_command => {},
-        .server_check_mailbox => {
-            if (self.checkMailbox(&server_mailbox, &client_command, &client_command_payload)) {
-                continue :state .server_run_client_command;
-            } else {
-                //TODO
+        .server_needs_to_init_mailbox => {
+            if (self.initMailbox(unix_sock_path)) |mailbox| {
+                self.mailbox = mailbox;
+                continue :state .server_needs_to_init_process_manager;
             }
         },
+        .server_needs_to_init_process_manager => {},
         .server_encountered_fatal_error => {
             log.err("Encountered fatal error {}.", .{fatal_error});
             return;
         },
+        .server_encountered_log_error => {},
+        .server_encountered_config_error => {},
+        .server_encountered_mailbox_error => {},
+        .server_encountered_process_error => {},
     }
 }
 
 const State = enum {
-    server_needs_to_start_mailbox,
-    server_needs_to_load_config,
-    server_needs_to_parse_config,
-    server_needs_to_prepare_config_update,
-    server_run_client_command,
+    server_needs_to_init_logger,
+    server_needs_to_init_config,
+    server_needs_to_init_mailbox,
+    server_needs_to_init_process_manager,
     server_encountered_fatal_error,
-    server_encountered_syntax_error,
-    server_can_exit_cleanly,
-    server_wait_for_command,
-    server_check_mailbox,
+    server_encountered_log_error,
+    server_encountered_config_error,
+    server_encountered_mailbox_error,
+    server_encountered_process_error,
 };
 
 const std = @import("std");

@@ -9,6 +9,7 @@ const log = std.log;
 const posix = std.posix;
 const builtin = @import("builtin");
 const common = @import("common");
+const Thread = std.Thread;
 const Config = common.Config;
 const Logger = common.Logger;
 const AsyncMailbox = @This();
@@ -19,8 +20,10 @@ client: net.Server.Connection,
 bell: *std.atomic.Value(bool),
 command: common.Command,
 payload: [256]u8,
+thread: Thread,
+logger: *Logger,
 
-pub fn init(unix_socket_path: []const u8, bell: *std.atomic.Value(bool)) AsyncMailbox {
+pub fn init(unix_socket_path: []const u8, bell: *std.atomic.Value(bool), logger: *Logger) AsyncMailbox {
     return .{
         .unix_socket_path = unix_socket_path,
         .server = undefined,
@@ -28,6 +31,8 @@ pub fn init(unix_socket_path: []const u8, bell: *std.atomic.Value(bool)) AsyncMa
         .bell = bell,
         .command = undefined,
         .payload = undefined,
+        .logger = logger,
+        .thread = undefined,
     };
 }
 

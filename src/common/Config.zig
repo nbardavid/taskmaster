@@ -1,254 +1,80 @@
 pub const Config = @This();
 
-arena: heap.ArenaAllocator,
-jobs: ArrayList(Program),
-parsed: ?Programs,
-fingerprint: u64 = 0,
+config_file: fs.File,
 
-pub const ParsingError = error{
-    ParseError,
-} || Io.Reader.LimitedAllocError || mem.Allocator.Error || json.ParseError(Job);
-
-pub fn init(gpa: mem.Allocator) Config {
+pub fn init() Config {
     return .{
-        .arena = heap.ArenaAllocator.init(gpa),
-        .jobs = ArrayList(Program).empty,
-        .parsed = null,
+        .config_file = undefined,
     };
 }
 
-const Programs = struct { programs: json.ArrayHashMap(Job) };
-
-pub fn parse(config: *Config, file_reader: *Io.Reader) !void {
-    const allocator = config.arena.allocator();
-    if (config.parsed) |_| {
-        _ = config.arena.reset(.retain_capacity);
-        config.parsed = null;
-    }
-
-    const content = try file_reader.allocRemaining(allocator, .unlimited);
-    config.parsed = try json.parseFromSliceLeaky(
-        Programs,
-        allocator,
-        content,
-        .{},
-    );
-
-    var it = config.parsed.?.programs.map.iterator();
-    const len = config.parsed.?.programs.map.count();
-    try config.jobs.ensureUnusedCapacity(allocator, len);
-
-    while (it.next()) |entry| {
-        const program = try Program.createFromJob(allocator, entry.key_ptr.*, entry.value_ptr.*);
-        config.jobs.appendAssumeCapacity(program);
-    }
+pub fn open(self: *Config, config_file_path: []const u8) !void {
+    self.config_file = try fs.cwd().openFile(config_file_path, .{ .mode = .read_only });
 }
 
-pub fn getParsed(config: *const Config) []const Program {
-    return config.jobs.items[0..];
+pub fn parseLeaky(self: *Config, gpa: mem.Allocator) !ParsedResult {
+    var file_content_hasher = std.hash.Wyhash.init(0);
+
+    var arena_instance: heap.ArenaAllocator = .init(gpa);
+    errdefer arena_instance.deinit();
+
+    var file_buffer: [1024]u8 = undefined;
+    var file_reader: fs.File.Reader = self.config_file.reader(&file_buffer);
+    const reader: *Io.Reader = file_reader.interface();
+
+    const file_content = try reader.allocRemaining(arena_instance.allocator(), .unlimited);
+    file_content_hasher.update(file_content);
+    const parsed: json.Parsed(RawConfig) = try json.parseFromSliceLeaky(RawConfig, arena_instance.allocator(), file_content, .{});
+    return ParsedResult.init(
+        arena_instance,
+        parsed,
+        file_content,
+        file_content_hasher.final(),
+    );
+}
+
+pub fn reload(self: *Config) !void {
+    try self.config_file.seekTo(0);
 }
 
 pub fn deinit(self: *Config) void {
-    self.arena.deinit();
+    self.config_file.close();
 }
 
-pub const Program = struct {
-    name: []const u8,
-    conf: struct {
-        cmd: []const u8,
-        numprocs: usize,
-        stdout: []const u8,
-        stderr: []const u8,
-        autostart: bool,
-        autorestart: AutoRestart,
-        exitcodes: []ExitCode,
-        starttime: usize,
-        startretries: usize,
-        stoptime: usize,
-        stopsignal: Signal,
-        workingdir: []const u8,
-        umask: usize,
-    },
+pub const ParsedResult = struct {
+    arena: heap.ArenaAllocator,
+    parsed: json.Parsed(RawConfig),
+    file_hash: u64,
+    file_content: []u8,
 
-    pub fn createFromJob(arena: mem.Allocator, name: []const u8, job: Job) !Program {
+    pub fn init(arena: heap.ArenaAllocator, parsed: json.Parsed(RawConfig), file_content: []u8, file_hash: u64) ParsedResult {
         return .{
-            .name = try arena.dupe(u8, name),
-            .conf = .{ .cmd = blk: {
-                if (job.cmd) |defined| {
-                    const cmd = try arena.dupe(u8, defined);
-                    break :blk cmd;
-                } else {
-                    return error.ParseError;
-                }
-            }, .numprocs = blk: {
-                if (job.numprocs) |defined| {
-                    break :blk defined;
-                } else {
-                    break :blk 1;
-                }
-            }, .stdout = blk: {
-                if (job.stdout) |defined| {
-                    const stdout = try arena.dupe(u8, defined);
-                    break :blk stdout;
-                } else {
-                    const stdout = try arena.dupe(u8, "stdout");
-                    break :blk stdout;
-                }
-            }, .stderr = blk: {
-                if (job.stderr) |defined| {
-                    const stderr = try arena.dupe(u8, defined);
-                    break :blk stderr;
-                } else {
-                    const stderr = try arena.dupe(u8, "stderr");
-                    break :blk stderr;
-                }
-            }, .autostart = blk: {
-                if (job.autostart) |defined| {
-                    break :blk defined;
-                } else {
-                    break :blk true;
-                }
-            }, .autorestart = blk: {
-                if (job.autorestart) |defined| {
-                    const restart = AutoRestart.autoRestartFromString(defined) orelse return error.ParseError;
-                    break :blk restart;
-                } else {
-                    break :blk AutoRestart.always;
-                }
-            }, .exitcodes = blk: {
-                if (job.exitcodes) |defined| {
-                    var list = std.ArrayListUnmanaged(ExitCode).empty;
-                    try list.ensureUnusedCapacity(arena, defined.len);
-                    for (defined) |exit_code| {
-                        list.appendAssumeCapacity(ExitCode.exitCodeFromInt(exit_code));
-                    }
-                    break :blk try list.toOwnedSlice(arena);
-                } else {
-                    var list = std.ArrayListUnmanaged(ExitCode).empty;
-                    try list.ensureUnusedCapacity(arena, 1);
-                    list.appendAssumeCapacity(ExitCode.exitCodeFromInt(0));
-                    break :blk try list.toOwnedSlice(arena);
-                }
-            }, .starttime = blk: {
-                if (job.starttime) |defined| {
-                    break :blk defined;
-                } else {
-                    break :blk 3;
-                }
-            }, .startretries = blk: {
-                if (job.startretries) |defined| {
-                    break :blk defined;
-                } else {
-                    break :blk 3;
-                }
-            }, .stoptime = blk: {
-                if (job.stoptime) |defined| {
-                    break :blk defined;
-                } else {
-                    break :blk 3;
-                }
-            }, .stopsignal = blk: {
-                if (job.stopsignal) |defined| {
-                    const signal = Signal.signalFromString(defined) orelse return error.ParseError;
-                    break :blk signal;
-                } else {
-                    break :blk Signal.signalFromString("TERM").?;
-                }
-            }, .umask = blk: {
-                if (job.umask) |defined| {
-                    const umask = try std.fmt.parseUnsigned(usize, defined, 8);
-                    break :blk umask;
-                } else {
-                    break :blk 22;
-                }
-            }, .workingdir = blk: {
-                if (job.workingdir) |defined| {
-                    const workingdir = try arena.dupe(u8, defined);
-                    break :blk workingdir;
-                } else {
-                    const workingdir = try arena.dupe(u8, "workingdir");
-                    break :blk workingdir;
-                }
-            } },
+            .arena = arena,
+            .parsed = parsed,
+            .file_content = file_content,
+            .file_hash = file_hash,
         };
     }
 
-    pub fn clone(program: *const Program, allocator: mem.Allocator) !Program {
-        if (allocator.dupe(Program, program[0..1])) |config| {
-            return config[0];
-        } else |err| {
-            return err;
-        }
+    pub fn deinit(self: *ParsedResult) void {
+        self.arena.deinit();
     }
 
-    pub fn hash(self: *const Program) u64 {
-        var h = std.hash.Wyhash.init(0);
-
-        h.update(self.name);
-        h.update(self.conf.cmd);
-        h.update(self.conf.stdout);
-        h.update(self.conf.stderr);
-        h.update(self.conf.workingdir);
-
-        h.update(std.mem.asBytes(&self.conf.numprocs));
-        h.update(std.mem.asBytes(&self.conf.autostart));
-        h.update(std.mem.asBytes(&self.conf.autorestart));
-        h.update(std.mem.asBytes(&self.conf.starttime));
-        h.update(std.mem.asBytes(&self.conf.startretries));
-        h.update(std.mem.asBytes(&self.conf.stoptime));
-        h.update(std.mem.asBytes(&self.conf.stopsignal));
-        h.update(std.mem.asBytes(&self.conf.umask));
-
-        for (self.conf.exitcodes) |code| {
-            h.update(std.mem.asBytes(&code));
-        }
-
-        return h.final();
-    }
-
-    pub fn format(
-        self: @This(),
-        writer: *std.Io.Writer,
-    ) !void {
-        try writer.print(
-            \\Program {{
-            \\  name       = {s}
-            \\  cmd        = {s}
-            \\  numprocs   = {d}
-            \\  stdout     = {s}
-            \\  stderr     = {s}
-            \\  autostart  = {}
-            \\  autorestart= {s}
-            \\  exitcodes  = {any}
-            \\  starttime  = {d}
-            \\  startretries= {d}
-            \\  stoptime   = {d}
-            \\  stopsignal = {s}
-            \\  workingdir = {s}
-            \\  umask      = {o}
-            \\}}
-        ,
-            .{
-                self.name,
-                self.conf.cmd,
-                self.conf.numprocs,
-                self.conf.stdout,
-                self.conf.stderr,
-                self.conf.autostart,
-                self.conf.autorestart.stringFromAutoRestart(),
-                self.conf.exitcodes,
-                self.conf.starttime,
-                self.conf.startretries,
-                self.conf.stoptime,
-                self.conf.stopsignal.stringFromSignal(),
-                self.conf.workingdir,
-                self.conf.umask,
-            },
-        );
+    pub fn getResultMap(self: *ParsedResult) *json.ArrayHashMap(RawProcess) {
+        return &self.parsed.value.processes;
     }
 };
 
-pub const Job = struct {
+pub const RawConfig = struct {
+    processes: json.ArrayHashMap(RawProcess),
+};
+
+pub const RawProcess = struct {
+    name: []const u8,
+    conf: RawProcessConfig,
+};
+
+pub const RawProcessConfig = struct {
     cmd: ?[]const u8 = null,
     numprocs: ?usize = null,
     stdout: ?[]const u8 = null,
@@ -261,42 +87,14 @@ pub const Job = struct {
     stoptime: ?usize = null,
     stopsignal: ?[]const u8 = null,
     workingdir: ?[]const u8 = null,
+    env: ?json.ArrayHashMap([]const u8),
     umask: ?[]const u8 = null,
-
-    pub fn format(
-        self: @This(),
-        writer: *std.Io.Writer,
-    ) !void {
-        try writer.print(
-            "Job{{\n cmd={s}\n numprocs={d}\n autostart={}\n autorestart={s}\n stdout={s}\n stderr={s}\n workingdir={s}\n umask={s}\n exitcodes={any}\n starttime={d}\n startretries={d}\n stoptime={d}\n stopsignal={s}\n}}",
-            .{
-                self.cmd,
-                self.numprocs,
-                self.autostart,
-                self.autorestart,
-                self.stdout,
-                self.stderr,
-                self.workingdir,
-                self.umask,
-                self.exitcodes,
-                self.starttime,
-                self.startretries,
-                self.stoptime,
-                self.stopsignal,
-            },
-        );
-    }
 };
 
 const std = @import("std");
 const heap = std.heap;
 const mem = std.mem;
-const StringMap = std.StringArrayHashMapUnmanaged;
-const EnumSet = std.EnumSet;
-const ArrayList = std.ArrayListUnmanaged;
+const fs = std.fs;
 const json = std.json;
 const Io = std.Io;
-const Signal = @import("process.zig").Signal;
-const AutoRestart = @import("process.zig").AutoRestart;
 const hash = std.hash;
-const ExitCode = @import("process.zig").ExitCode;

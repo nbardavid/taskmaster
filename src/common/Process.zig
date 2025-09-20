@@ -1,3 +1,46 @@
+pub const Process = @This();
+
+config: Program,
+fingerprint: u64,
+proc: process.Child,
+
+pub fn init(fingerprint: u64) !Process {
+    return .{
+        .config = undefined,
+        .fingerprint = fingerprint,
+        .proc = undefined,
+    };
+}
+
+pub const Config = struct {
+    name: []const u8,
+    conf: struct {
+        cmd: []const u8,
+        numprocs: usize,
+        stdout: []const u8,
+        stderr: []const u8,
+        autostart: bool,
+        autorestart: AutoRestart,
+        exitcodes: []ExitCode,
+        starttime: usize,
+        startretries: usize,
+        stoptime: usize,
+        stopsignal: Signal,
+        workingdir: []const u8,
+        umask: usize,
+    },
+};
+
+pub const Status = enum {
+    none,
+    stopped,
+    starting,
+    running,
+    stopping,
+    backoff,
+    exited,
+    fatal,
+};
 pub const Signal = enum(i32) {
     block,
     unblock,
@@ -128,19 +171,7 @@ pub const AutoRestart = enum(u8) {
     }
 };
 
-pub const Process = struct {
-    config: Program,
-    fingerprint: u64,
-
-    pub fn init(config: *const Program, gpa: mem.Allocator, fingerprint: u64) !Process {
-        const cloned = try config.clone(gpa);
-        return .{
-            .config = cloned,
-            .fingerprint = fingerprint,
-        };
-    }
-};
-
 const std = @import("std");
 const mem = std.mem;
+const process = std.process;
 const Program = @import("Config.zig").Program;
