@@ -52,7 +52,6 @@ pub fn getParsed(config: *const Config) []const Program {
 }
 
 pub fn deinit(self: *Config) void {
-    defer self.* = undefined;
     self.arena.deinit();
 }
 

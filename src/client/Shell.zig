@@ -24,7 +24,7 @@ pub fn init(gpa: mem.Allocator, writer: *Io.Writer) Shell {
 }
 
 pub fn deinit(self: *Shell) void {
-    defer self.arena.deinit();
+    self.arena.deinit();
 }
 
 pub fn enableHistory(_: *const Shell) void {
@@ -33,14 +33,6 @@ pub fn enableHistory(_: *const Shell) void {
 
 fn allocator(self: *Shell) mem.Allocator {
     return self.arena.allocator();
-}
-
-pub fn enablePersistentHistory(self: *Shell, path: []const u8) !void {
-    var path_buffer: [fs.max_path_bytes]u8 = undefined;
-    const cwd = std.fs.cwd();
-    const absolute_path = try cwd.realpath(path, &path_buffer);
-    self.enableHistory();
-    try anyline.write_history(self.allocator(), absolute_path);
 }
 
 pub fn readline(self: *Shell, prompt: []const u8) ![]u8 {

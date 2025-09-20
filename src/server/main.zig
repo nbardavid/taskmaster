@@ -2,31 +2,35 @@ pub fn main() !void {
     var gpa_instance: heap.GeneralPurposeAllocator(.{}) = .init;
     defer _ = gpa_instance.deinit();
     const gpa = gpa_instance.allocator();
-    _ = gpa;
 
-    const address = net.Address.initIp4([4]u8{ 0, 0, 0, 0 }, 8383);
-    var server = try net.Address.listen(address, .{
-        .reuse_address = true,
-    });
-    defer server.deinit();
+    var argv = proc.argsAlloc(gpa) catch |err| {
+        log.err("Fatal error encountered {}", .{err});
+        return;
+    };
+    defer proc.argsFree(gpa, argv);
 
-    var stdout_buffer: [1]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-    const stdout = &stdout_writer.interface;
+    const socket_file_path = if (argv.len == 2) argv[1][0..] else "/tmp/taskmaster.server.sock";
+    fs.cwd().deleteFile(socket_file_path) catch |err| {
+        log.err("failed to delete {s} : {}", .{ socket_file_path, err });
+    };
 
-    var client: ?net.Server.Connection = null;
-    var read_buffer: [1]u8 = undefined;
-    while (true) {
-        if (client) |*connected| {
-            var stream_reader: net.Stream.Reader = connected.stream.reader(&read_buffer);
-            const stream: *Io.Reader = stream_reader.interface();
-            _ = try stream.streamRemaining(stdout);
-            try stdout.writeAll(stdout.buffered());
-            try stdout.flush();
-        } else {
-            client = try server.accept();
-        }
-    }
+    // Create socket
+    const sockfd = try posix.socket(
+        posix.AF.UNIX,
+        posix.SOCK.STREAM | posix.SOCK.CLOEXEC,
+        0,
+    );
+    defer posix.close(sockfd);
+
+    var addr = try std.net.Address.initUnix(socket_file_path);
+    try posix.bind(sockfd, &addr.any, addr.getOsSockLen());
+    try posix.listen(sockfd, 1);
+
+    const stream = net.connectUnixSocket(socket_file_path) catch |err| {
+        log.err("Fatal error encountered {}", .{err});
+        return;
+    };
+    defer stream.close();
 }
 
 const std = @import("std");
@@ -36,6 +40,8 @@ const proc = std.process;
 const fs = std.fs;
 const Io = std.Io;
 const net = std.net;
+const log = std.log;
+const posix = std.posix;
 
 const common = @import("common");
 const Config = common.Config;
