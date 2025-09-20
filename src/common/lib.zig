@@ -12,3 +12,5 @@ pub const Signal = process.Signal;
 pub const ExitCode = process.ExitCode;
 pub const AutoRestart = process.AutoRestart;
 pub const Command = protocol.Command;
+pub const Program = config.Program;
+pub const Process = process.Process;

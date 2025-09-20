@@ -9,28 +9,20 @@ pub fn main() !void {
     };
     defer proc.argsFree(gpa, argv);
 
-    const socket_file_path = if (argv.len == 2) argv[1][0..] else "/tmp/taskmaster.server.sock";
-    fs.cwd().deleteFile(socket_file_path) catch |err| {
-        log.err("failed to delete {s} : {}", .{ socket_file_path, err });
-    };
+    const config_file_path = if (argv.len == 2) argv[2][0..] else "config.json";
+    const socket_file_path = if (argv.len == 3) argv[2][0..] else "/tmp/taskmaster.server.sock";
 
-    // Create socket
-    const sockfd = try posix.socket(
-        posix.AF.UNIX,
-        posix.SOCK.STREAM | posix.SOCK.CLOEXEC,
-        0,
-    );
-    defer posix.close(sockfd);
-
-    var addr = try std.net.Address.initUnix(socket_file_path);
-    try posix.bind(sockfd, &addr.any, addr.getOsSockLen());
-    try posix.listen(sockfd, 1);
-
-    const stream = net.connectUnixSocket(socket_file_path) catch |err| {
+    var config_file = fs.cwd().openFile(config_file_path, .{}) catch |err| {
         log.err("Fatal error encountered {}", .{err});
         return;
     };
-    defer stream.close();
+    defer config_file.close();
+
+    var server = Server.init(gpa, socket_file_path);
+    server.start(config_file) catch |err| {
+        log.err("Fatal error encountered {}", .{err});
+        return;
+    };
 }
 
 const std = @import("std");
@@ -46,3 +38,4 @@ const posix = std.posix;
 const common = @import("common");
 const Config = common.Config;
 const Logger = common.Logger;
+const Server = @import("Server.zig");

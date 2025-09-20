@@ -17,32 +17,29 @@ pub fn init(gpa: mem.Allocator) Config {
     };
 }
 
-fn allocator(self: *Config) mem.Allocator {
-    return self.arena.allocator();
-}
-
 const Programs = struct { programs: json.ArrayHashMap(Job) };
 
 pub fn parse(config: *Config, file_reader: *Io.Reader) !void {
+    const allocator = config.arena.allocator();
     if (config.parsed) |_| {
         _ = config.arena.reset(.retain_capacity);
         config.parsed = null;
     }
 
-    const content = try file_reader.allocRemaining(config.allocator(), .unlimited);
+    const content = try file_reader.allocRemaining(allocator, .unlimited);
     config.parsed = try json.parseFromSliceLeaky(
         Programs,
-        config.allocator(),
+        allocator,
         content,
         .{},
     );
 
     var it = config.parsed.?.programs.map.iterator();
     const len = config.parsed.?.programs.map.count();
-    try config.jobs.ensureUnusedCapacity(config.allocator(), len);
+    try config.jobs.ensureUnusedCapacity(allocator, len);
 
     while (it.next()) |entry| {
-        const program = try Program.createFromJob(config.allocator(), entry.key_ptr.*, entry.value_ptr.*);
+        const program = try Program.createFromJob(allocator, entry.key_ptr.*, entry.value_ptr.*);
         config.jobs.appendAssumeCapacity(program);
     }
 }
@@ -174,6 +171,39 @@ pub const Program = struct {
                 }
             } },
         };
+    }
+
+    pub fn clone(program: *const Program, allocator: mem.Allocator) !Program {
+        if (allocator.dupe(Program, program[0..1])) |config| {
+            return config[0];
+        } else |err| {
+            return err;
+        }
+    }
+
+    pub fn hash(self: *const Program) u64 {
+        var h = std.hash.Wyhash.init(0);
+
+        h.update(self.name);
+        h.update(self.conf.cmd);
+        h.update(self.conf.stdout);
+        h.update(self.conf.stderr);
+        h.update(self.conf.workingdir);
+
+        h.update(std.mem.asBytes(&self.conf.numprocs));
+        h.update(std.mem.asBytes(&self.conf.autostart));
+        h.update(std.mem.asBytes(&self.conf.autorestart));
+        h.update(std.mem.asBytes(&self.conf.starttime));
+        h.update(std.mem.asBytes(&self.conf.startretries));
+        h.update(std.mem.asBytes(&self.conf.stoptime));
+        h.update(std.mem.asBytes(&self.conf.stopsignal));
+        h.update(std.mem.asBytes(&self.conf.umask));
+
+        for (self.conf.exitcodes) |code| {
+            h.update(std.mem.asBytes(&code));
+        }
+
+        return h.final();
     }
 
     pub fn format(

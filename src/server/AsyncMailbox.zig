@@ -17,6 +17,8 @@ unix_socket_path: []const u8,
 server: net.Server,
 client: net.Server.Connection,
 bell: *std.atomic.Value(bool),
+command: common.Command,
+payload: [256]u8,
 
 pub fn init(unix_socket_path: []const u8, bell: *std.atomic.Value(bool)) AsyncMailbox {
     return .{
@@ -24,6 +26,8 @@ pub fn init(unix_socket_path: []const u8, bell: *std.atomic.Value(bool)) AsyncMa
         .server = undefined,
         .client = undefined,
         .bell = bell,
+        .command = undefined,
+        .payload = undefined,
     };
 }
 
@@ -33,7 +37,6 @@ pub fn start(self: *AsyncMailbox) !void {
     var client_buffer: [512]u8 = undefined;
     var client_reader: net.Stream.Reader = undefined;
     var reader: *Io.Reader = undefined;
-    var client_command: common.Command = undefined;
 
     state: switch (State.mailbox_not_open) {
         .mailbox_not_open => {
@@ -71,7 +74,7 @@ pub fn start(self: *AsyncMailbox) !void {
             self.server = .{
                 .listen_address = address,
                 .stream = .{
-                    .handle = .sockfd,
+                    .handle = sockfd,
                 },
             };
 
@@ -89,16 +92,37 @@ pub fn start(self: *AsyncMailbox) !void {
         .mailbox_accepted_new_client => {
             client_reader = self.client.stream.reader(&client_buffer);
             reader = client_reader.interface();
-            continue :state .mailbox_fetch_client_command;
+            continue :state .mailbox_peek_client_command;
         },
-        .mailbox_fetch_client_command => {
+        .mailbox_peek_client_command => {
             if (reader.peekStruct(common.Command, builtin.cpu.arch.endian())) |command| {
-                client_command = command;
+                self.command = command;
                 continue :state .mailbox_decode_client_command;
             } else |err| {
                 client_error = err;
                 continue :state .mailbox_encountered_read_error;
             }
+        },
+        .mailbox_decode_client_command => {
+            _ = reader.discard(.limited(@sizeOf(common.Command))) catch |err| {
+                client_error = err;
+                continue :state .mailbox_encountered_read_error;
+            };
+            switch (self.command.cmd) {
+                .dump, .quit, .status, .reload => {
+                    continue :state .mailbox_send_notification;
+                },
+                .start, .restart, .stop => {
+                    reader.readSliceAll(self.payload[0..self.command.payload_len]) catch |err| {
+                        client_error = err;
+                        continue :state .mailbox_encountered_read_error;
+                    };
+                    continue :state .mailbox_send_notification;
+                },
+            }
+        },
+        .mailbox_send_notification => {
+            self.bell.store(true, .release);
         },
         .mailbox_encountered_read_error => {
             log.warn("failed to read with client : {}", .{client_error});
@@ -109,17 +133,18 @@ pub fn start(self: *AsyncMailbox) !void {
             self.client = undefined;
             continue :state .mailbox_wait_for_client;
         },
-        .server_encountered_fatal_error => {},
+        .mailbox_encountered_fatal_error => {},
     }
 }
 
 const State = enum {
     mailbox_not_open,
     mailbox_wait_for_client,
-    mailbox_fetch_client_command,
+    mailbox_peek_client_command,
     mailbox_decode_client_command,
     mailbox_disconnect_client,
     mailbox_accepted_new_client,
     mailbox_encountered_fatal_error,
     mailbox_encountered_read_error,
+    mailbox_send_notification,
 };

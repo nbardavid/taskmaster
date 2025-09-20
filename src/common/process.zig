@@ -128,4 +128,19 @@ pub const AutoRestart = enum(u8) {
     }
 };
 
+pub const Process = struct {
+    config: Program,
+    fingerprint: u64,
+
+    pub fn init(config: *const Program, gpa: mem.Allocator, fingerprint: u64) !Process {
+        const cloned = try config.clone(gpa);
+        return .{
+            .config = cloned,
+            .fingerprint = fingerprint,
+        };
+    }
+};
+
 const std = @import("std");
+const mem = std.mem;
+const Program = @import("Config.zig").Program;
