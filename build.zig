@@ -2,65 +2,98 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib_mod = b.createModule(.{
-        .root_source_file = b.path("src/root.zig"),
+    const anyline_dep = b.dependency("anyline", .{
         .target = target,
         .optimize = optimize,
     });
+    const anyline = anyline_dep.module("anyline");
 
-    const exe_mod = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    exe_mod.addImport("taskmaster_lib", lib_mod);
-
-    const lib = b.addLibrary(.{
-        .linkage = .static,
+    const common = b.addLibrary(.{
         .name = "taskmaster",
-        .root_module = lib_mod,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/common/lib.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "anyline", .module = anyline },
+            },
+        }),
     });
+    b.installArtifact(common);
 
-    b.installArtifact(lib);
-
-    const exe = b.addExecutable(.{
-        .name = "taskmaster",
-        .root_module = exe_mod,
+    const server = b.addExecutable(.{
+        .name = "taskmaster-server",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/server/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "anyline", .module = anyline },
+                .{ .name = "common", .module = common.root_module },
+            },
+        }),
     });
+    b.installArtifact(server);
 
-    exe.linkLibC();
-    exe.linkSystemLibrary("readline");
+    const run_server_cmd = b.addRunArtifact(server);
 
-    b.installArtifact(exe);
+    run_server_cmd.step.dependOn(b.getInstallStep());
 
-    const run_cmd = b.addRunArtifact(exe);
-
-    run_cmd.step.dependOn(b.getInstallStep());
-
+    run_server_cmd.addFileArg(b.path("config.json"));
     if (b.args) |args| {
-        run_cmd.addArgs(args);
+        run_server_cmd.addArgs(args);
     }
 
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
+    const run_server_step = b.step("run_server", "Run the app");
+    run_server_step.dependOn(&run_server_cmd.step);
 
-    const lib_unit_tests = b.addTest(.{
-        .root_module = lib_mod,
+    const server_unit_test = b.addTest(.{
+        .root_module = server.root_module,
     });
 
-    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
+    const run_server_unit_test = b.addRunArtifact(server_unit_test);
 
-    const exe_unit_tests = b.addTest(.{
-        .root_module = exe_mod,
+    const test_server_step = b.step("test_server", "Run unit tests");
+    test_server_step.dependOn(&run_server_unit_test.step);
+
+    const client = b.addExecutable(.{
+        .name = "taskmaster-client",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/client/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "anyline", .module = anyline },
+                .{ .name = "common", .module = common.root_module },
+            },
+        }),
+    });
+    b.installArtifact(client);
+
+    const run_client_cmd = b.addRunArtifact(client);
+
+    run_client_cmd.step.dependOn(b.getInstallStep());
+
+    run_client_cmd.addFileArg(b.path("config.json"));
+    if (b.args) |args| {
+        run_client_cmd.addArgs(args);
+    }
+
+    const run_client_step = b.step("run_client", "Run the app");
+    run_client_step.dependOn(&run_client_cmd.step);
+
+    const client_unit_test = b.addTest(.{
+        .root_module = client.root_module,
     });
 
-    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
+    const run_client_unit_test = b.addRunArtifact(client_unit_test);
 
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_lib_unit_tests.step);
-    test_step.dependOn(&run_exe_unit_tests.step);
+    const test_client_step = b.step("test_client", "Run unit tests");
+    test_client_step.dependOn(&run_client_unit_test.step);
+
+    const check_step = b.step("check", "zls helper");
+    check_step.dependOn(&server.step);
+    check_step.dependOn(&client.step);
 }
