@@ -106,11 +106,11 @@ pub fn start(self: *Server, log_file_path: []const u8, unix_sock_path: []const u
 
         .server_needs_to_send_command => {
             sendCommand(&server_process_manager, cmd, &cmd_payload);
+            continue :state .server_needs_to_wait_for_command;
         },
 
         .server_needs_to_stop => {
             log.info("state=SERVER_STOP", .{});
-            Thread.sleep(std.time.ns_per_s * 10);
             log.info("server stopped cleanly", .{});
             return;
         },

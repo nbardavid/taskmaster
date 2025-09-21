@@ -190,17 +190,19 @@ fn mainLoop(self: *Mailbox) !void {
                 client_error = err;
                 continue :state .mailbox_encountered_read_error;
             };
+
             if (rc == 0) continue :state .mailbox_peek_client_command;
 
-            if ((fds[0].revents & posix.POLL.IN) != 0) {
+            const revents = fds[0].revents;
+            if ((revents & posix.POLL.IN) != 0) {
                 if (reader.peekStruct(common.Command, builtin.cpu.arch.endian())) |command| {
                     log.info("peeked client command: {any}", .{command.cmd});
                     self.command = command;
                     continue :state .mailbox_decode_client_command;
                 } else |err| switch (err) {
                     error.EndOfStream => {
-                        log.debug("client EOF; keep waiting", .{});
-                        continue :state .mailbox_peek_client_command;
+                        log.info("client EOF; disconnecting", .{});
+                        continue :state .mailbox_disconnect_client;
                     },
                     else => {
                         log.warn("error peeking client command: {}", .{err});
@@ -208,10 +210,16 @@ fn mainLoop(self: *Mailbox) !void {
                         continue :state .mailbox_encountered_read_error;
                     },
                 }
-            } else {
-                log.warn("client revents=0x{x}; disconnecting", .{fds[0].revents});
+            }
+
+            if ((revents & (posix.POLL.HUP | posix.POLL.ERR)) != 0) {
+                log.info("client hangup/error (revents=0x{x}); disconnecting", .{revents});
                 continue :state .mailbox_disconnect_client;
             }
+
+            // fallback: if we get here, just disconnect
+            log.warn("unexpected client revents=0x{x}; disconnecting", .{revents});
+            continue :state .mailbox_disconnect_client;
         },
 
         .mailbox_decode_client_command => {
@@ -245,7 +253,7 @@ fn mainLoop(self: *Mailbox) !void {
             log.debug("state=MAILBOX_SEND_NOTIFICATION", .{});
             self.bell.store(true, .release);
             log.info("bell triggered due to client command", .{});
-            continue :state .mailbox_wait_for_client;
+            continue :state .mailbox_peek_client_command;
         },
 
         .mailbox_encountered_read_error => {
