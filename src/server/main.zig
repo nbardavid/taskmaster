@@ -1,3 +1,26 @@
+pub const warn =
+    \\=============================================================
+    \\ Taskmaster config sanity check:
+    \\
+    \\ 1. Make sure the program binary exists and is executable:
+    \\    e.g. /usr/bin/taskmaster_foo
+    \\    → check with: ls -l /usr/bin/taskmaster_foo
+    \\
+    \\ 2. Make sure the working directory exists before launch:
+    \\    e.g. /tmp/testtest
+    \\    → create it with: mkdir -p /tmp/testtest
+    \\
+    \\ 3. Make sure stdout/stderr log paths are writable:
+    \\    e.g. /tmp/foo.stdout, /tmp/foo.stderr
+    \\    → parent directories must exist and be writable
+    \\
+    \\ 4. Double-check your env values (KEY=VALUE) are correct.
+    \\
+    \\ If any of these are missing, you will get error.FileNotFound
+    \\ during startup.
+    \\=============================================================
+;
+
 pub fn main() !void {
     var gpa_instance = heap.GeneralPurposeAllocator(.{
         .stack_trace_frames = 32,
@@ -10,6 +33,8 @@ pub fn main() !void {
     }){};
     defer _ = gpa_instance.deinit();
     const gpa = gpa_instance.allocator();
+
+    std.debug.print("{s}\n", .{warn});
 
     var argv = proc.argsAlloc(gpa) catch |err| {
         log.err("Fatal error encountered {}", .{err});
