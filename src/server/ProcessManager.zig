@@ -4,7 +4,13 @@ gpa: mem.Allocator,
 config: Config,
 process_mpool: heap.MemoryPool(Process),
 live: HashMap(*Process),
+live_pid: AutoArrayHashMapUnmanaged(posix.pid_t, ProcessChild),
 thread: Thread,
+
+const ProcessChild = struct {
+    parent: *Process,
+    index: usize,
+};
 
 pub fn init(gpa: mem.Allocator, config_file_path: []const u8) ProcessManager {
     return .{
@@ -12,6 +18,7 @@ pub fn init(gpa: mem.Allocator, config_file_path: []const u8) ProcessManager {
         .config = Config.init(config_file_path),
         .process_mpool = heap.MemoryPool(Process).init(gpa),
         .live = HashMap(*Process).empty,
+        .live_pid = AutoArrayHashMapUnmanaged(posix.pid_t, ProcessChild).empty,
         .thread = undefined,
     };
 }
@@ -115,29 +122,71 @@ fn commitStagedConfig(self: *ProcessManager, staged: *HashMap(*Process)) !HashMa
 }
 
 fn replaceProcess(self: *ProcessManager, old_proc: *Process, new_proc: *Process) !void {
-    _ = self;
-    _ = old_proc;
-    _ = new_proc;
+    try self.stopProcess(old_proc);
+    old_proc.deinit();
+    self.process_mpool.destroy(old_proc);
+
+    if (new_proc.config.conf.autostart) {
+        try self.startProcess(new_proc);
+    }
 }
 
-fn stopProcess(self: *ProcessManager, old_proc: *Process) !void {
-    _ = self;
-    _ = old_proc;
+fn stopProcess(self: *ProcessManager, proc: *Process) !void {
+    for (proc.instances) |*inst| {
+        if (inst.pid) |pid| {
+            try inst.stop(@intFromEnum(proc.config.conf.stopsignal), proc.config.conf.stoptime * 1000);
+            _ = self.live_pid.swapRemove(pid);
+        }
+    }
 }
 
 fn startProcess(self: *ProcessManager, proc: *Process) !void {
-    _ = self;
-    _ = proc;
+    const arena = proc.arena.allocator();
+    for (proc.instances, 0..) |*inst, i| {
+        try inst.start(&proc.config, arena);
+        if (inst.pid) |pid| {
+            try self.live_pid.put(self.gpa, pid, .{ .parent = proc, .index = i });
+        }
+    }
 }
 
 fn restartProcess(self: *ProcessManager, proc: *Process) !void {
-    _ = self;
-    _ = proc;
+    try self.stopProcess(proc);
+    try self.startProcess(proc);
 }
 
-fn manageProcess(self: *ProcessManager, process: *Process) !void {
-    _ = self;
-    _ = process;
+fn manageProcess(self: *ProcessManager, proc: *Process) !void {
+    const now: u64 = @intCast(std.time.milliTimestamp());
+
+    for (proc.instances, 0..) |*child, i| {
+        switch (child.status) {
+            .starting => {
+                if ((now - child.last_start_time) >= (proc.config.conf.starttime * 1000)) {
+                    child.status = .running;
+                }
+            },
+            .exited => {
+                const should_restart = switch (proc.config.conf.autorestart) {
+                    .always => true,
+                    .unexpected => if (child.exit_code) |code| !proc.isExpectedExitCode(code) else true,
+                    .never => false,
+                };
+
+                if (should_restart and child.retries < proc.config.conf.startretries) {
+                    child.retries += 1;
+                    try child.start(&proc.config, proc.arena.allocator());
+                    if (child.pid) |pid| {
+                        try self.live_pid.put(self.gpa, pid, .{ .parent = proc, .index = i });
+                    }
+                } else if (!should_restart) {
+                    child.status = .stopped;
+                } else {
+                    child.status = .fatal;
+                }
+            },
+            else => {},
+        }
+    }
 }
 
 fn applyLiveConfig(self: *ProcessManager) !void {
@@ -226,7 +275,10 @@ const Status = enum {
 };
 
 fn shutdown(self: *ProcessManager) !void {
-    _ = self;
+    var it = self.live.iterator();
+    while (it.next()) |entry| {
+        try self.stopProcess(entry.value_ptr.*);
+    }
 }
 
 pub fn deinit(self: *ProcessManager) void {
@@ -243,9 +295,12 @@ const heap = std.heap;
 const mem = std.mem;
 const Io = std.Io;
 const Thread = std.Thread;
+const posix = std.posix;
 
+const AutoArrayHashMapUnmanaged = std.AutoArrayHashMapUnmanaged;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const HashMap = std.StringArrayHashMapUnmanaged;
 const common = @import("common");
 const Config = common.Config;
 const Process = @import("Process.zig");
+const ExitCode = Process.ExitCode;

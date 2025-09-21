@@ -4,6 +4,8 @@ arena: heap.ArenaAllocator,
 config: Config,
 fingerprint: ?u64,
 instances: []Child,
+retries: usize = 0,
+backoff_until: ?u64 = null,
 
 pub fn init(gpa: mem.Allocator) Process {
     return .{
@@ -11,17 +13,92 @@ pub fn init(gpa: mem.Allocator) Process {
         .config = undefined,
         .fingerprint = null,
         .instances = &.{},
+        .retries = 0,
+        .backoff_until = null,
     };
 }
 
-pub fn deinit(self: *Process) void {
+pub fn currentStatus(self: *Process) Status {
+    var all_stopped = true;
+    var all_exited = true;
+
+    for (self.instances) |*inst| {
+        switch (inst.status) {
+            .fatal => return .fatal,
+            .running => return .running,
+            .backoff => return .backoff,
+            .stopped => {},
+            .exited => {},
+            else => {
+                all_stopped = false;
+                all_exited = false;
+            },
+        }
+        if (inst.status != .stopped) all_stopped = false;
+        if (inst.status != .exited) all_exited = false;
+    }
+
+    if (all_stopped) {
+        return .stopped;
+    }
+
+    if (all_exited and self.config.conf.autorestart == .never) {
+        return .exited;
+    }
+
+    return .none;
+}
+
+pub fn startAll(self: *Process) !void {
+    const now = time.milliTimestamp();
+    if (self.backoff_until) |until| {
+        if (now < until) return error.BackoffActive;
+    }
+
+    const arena = self.arena.allocator();
+    for (self.instances) |*inst| {
+        try inst.start(&self.config, arena);
+    }
+
+    self.retries += 1;
+    log.info("process {s}: started all children", .{self.config.name});
+
+    if (self.retries >= self.config.conf.startretries) {
+        self.applyBackoff();
+    }
+}
+
+pub fn stopAll(self: *Process) !void {
     for (self.instances) |*inst| {
         if (inst.pid != null) {
-            inst.kill();
+            try inst.stop(@intFromEnum(self.config.conf.stopsignal), self.config.conf.stoptime * 1000);
         }
     }
-    defer self.* = undefined;
-    self.arena.deinit();
+    log.info("process {s}: stopped all children", .{self.config.name});
+}
+
+pub fn restartAll(self: *Process) !void {
+    try self.stopAll();
+    try self.startAll();
+    log.info("process {s}: restarted all children", .{self.config.name});
+}
+
+pub fn applyBackoff(self: *Process) void {
+    const now = time.milliTimestamp();
+    self.backoff_until = now + 10_000;
+    log.warn("process {s}: entering backoff until {d}", .{ self.config.name, self.backoff_until.? });
+}
+
+pub fn resetRetriesIfStable(self: *Process) void {
+    const now = time.milliTimestamp();
+    for (self.instances) |*inst| {
+        if (inst.status == .running and
+            (now - inst.last_start_time) >= (self.config.conf.starttime * 1000))
+        {
+            self.retries = 0;
+            inst.retries = 0;
+        }
+    }
 }
 
 pub fn hash(self: *Process) u64 {
@@ -58,6 +135,23 @@ pub fn hash(self: *Process) u64 {
     const fp = hasher.final();
     self.fingerprint = fp;
     return fp;
+}
+
+pub fn deinit(self: *Process) void {
+    for (self.instances) |*inst| {
+        if (inst.pid != null) {
+            inst.kill();
+        }
+    }
+    defer self.* = undefined;
+    self.arena.deinit();
+}
+
+pub fn isExpectedExitCode(self: *Process, code: u32) bool {
+    const ecode = ExitCode.exitCodeFromInt(code);
+    return for (self.config.conf.exitcodes) |c| {
+        break c == ecode;
+    } else false;
 }
 
 pub fn configure(self: *Process, process_name: []const u8, process_config: *RawProcessConfig) !void {
@@ -300,6 +394,8 @@ const std = @import("std");
 const mem = std.mem;
 const heap = std.heap;
 const process = std.process;
+const time = std.time;
+const log = std.log;
 
 const common = @import("common");
 const ParsedConfig = common.Config;
