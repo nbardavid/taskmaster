@@ -255,6 +255,25 @@ fn mainLoop(self: *ProcessManager) !void {
                 continue :state .pm_failed_to_load_config;
             }
         },
+        .pm_needs_to_load_config => {
+            log.info("state=LOAD_CONFIG", .{});
+            if (self.stopping.load(.acquire)) continue :state .pm_shutdown;
+
+            current_parsed_result.deinit();
+            current_parsed_result = .empty;
+            current_parsed_result.valid = false;
+
+            if (self.loadConfig()) |result| {
+                log.info("config loaded successfully", .{});
+                current_parsed_result = result;
+                current_parsed_result.valid = true;
+                continue :state .pm_needs_to_stage_new_config;
+            } else |err| {
+                log.err("config load failed: {}", .{err});
+                fatal_error = err;
+                continue :state .pm_failed_to_load_config;
+            }
+        },
         .pm_needs_to_stage_new_config => {
             log.info("state=STAGE_NEW_CONFIG", .{});
             if (self.stopping.load(.acquire)) continue :state .pm_shutdown;
@@ -299,6 +318,7 @@ fn mainLoop(self: *ProcessManager) !void {
         .pm_needs_to_wait_for_commands => {
             if (self.stopping.load(.acquire)) continue :state .pm_shutdown;
             if (self.checkForNewCommand(&local_command, &local_command_payload)) {
+                log.info("state=PM_NEEDS_TO_WAIT_FOR_COMMANDS ", .{});
                 continue :state .pm_needs_to_exec_command;
             } else {
                 Thread.sleep(std.time.ns_per_ms);
@@ -306,31 +326,110 @@ fn mainLoop(self: *ProcessManager) !void {
             }
         },
         .pm_needs_to_exec_command => {
+            log.info("state=PM_NEEDS_TO_EXEC_COMMAND", .{});
             switch (local_command.cmd) {
-                .dump => {
-                    log.info("dump\n", .{});
-                },
-                .quit => {
-                    log.info("quit\n", .{});
-                },
-                .reload => {
-                    log.info("reload\n", .{});
-                },
-                .restart => {
-                    log.info("restart\n", .{});
-                },
-                .start => {
-                    log.info("start\n", .{});
-                },
-                .status => {
-                    log.info("status\n", .{});
-                },
-                .stop => {
-                    log.info("stop\n", .{});
-                },
+                .status => continue :state .pm_exec_status,
+                .start => continue :state .pm_exec_start,
+                .stop => continue :state .pm_exec_stop,
+                .restart => continue :state .pm_exec_restart,
+                .reload => continue :state .pm_exec_reload,
+                .dump => continue :state .pm_exec_dump,
+                .quit => continue :state .pm_exec_quit,
             }
             continue :state .pm_needs_to_wait_for_commands;
         },
+
+        .pm_exec_status => {
+            var it = self.live.iterator();
+            while (it.next()) |entry| {
+                const proc = entry.value_ptr.*;
+                const st = proc.currentStatus();
+                log.info("proc {s} -> {any}", .{ proc.config.name, st });
+            }
+            continue :state .pm_needs_to_wait_for_commands;
+        },
+
+        .pm_exec_start => {
+            const name = local_command_payload[0..local_command.payload_len];
+            if (self.live.get(name)) |proc| {
+                if (self.startProcess(proc)) |_| {
+                    log.info("started {s}", .{name});
+                } else |err| {
+                    log.err("failed to start {s}: {}", .{ name, err });
+                    fatal_error = err;
+                    continue :state .pm_encountered_fatal_error;
+                }
+            } else {
+                log.warn("no process named {s}", .{name});
+            }
+            continue :state .pm_needs_to_wait_for_commands;
+        },
+
+        .pm_exec_stop => {
+            const name = local_command_payload[0..local_command.payload_len];
+            if (self.live.get(name)) |proc| {
+                if (self.stopProcess(proc)) |_| {
+                    log.info("stopped {s}", .{name});
+                } else |err| {
+                    log.err("failed to stop {s}: {}", .{ name, err });
+                    fatal_error = err;
+                    continue :state .pm_encountered_fatal_error;
+                }
+            } else {
+                log.warn("no process named {s}", .{name});
+            }
+            continue :state .pm_needs_to_wait_for_commands;
+        },
+
+        .pm_exec_restart => {
+            const name = local_command_payload[0..local_command.payload_len];
+            if (self.live.get(name)) |proc| {
+                if (self.restartProcess(proc)) |_| {
+                    log.info("restarted {s}", .{name});
+                } else |err| {
+                    log.err("failed to restart {s}: {}", .{ name, err });
+                    fatal_error = err;
+                    continue :state .pm_encountered_fatal_error;
+                }
+            } else {
+                log.warn("no process named {s}", .{name});
+            }
+            continue :state .pm_needs_to_wait_for_commands;
+        },
+
+        .pm_exec_reload => {
+            log.info("reloading config…", .{});
+            continue :state .pm_reload_config_file;
+        },
+
+        .pm_reload_config_file => {
+            log.info("reloading content of config file", .{});
+            if (self.config.reload()) {
+                continue :state .pm_needs_to_load_config;
+            } else |err| {
+                log.err("failed to reload config {}", .{err});
+                fatal_error = err;
+                continue :state .pm_encountered_fatal_error;
+            }
+        },
+        .pm_exec_dump => {
+            var it = self.live.iterator();
+            while (it.next()) |entry| {
+                const proc = entry.value_ptr.*;
+                log.info("proc {s}: cmd={s} numprocs={d}", .{
+                    proc.config.name,
+                    proc.config.conf.cmd,
+                    proc.config.conf.numprocs,
+                });
+            }
+            continue :state .pm_needs_to_wait_for_commands;
+        },
+        .pm_exec_quit => {
+            log.info("received quit", .{});
+            self.stopping.store(true, .release);
+            continue :state .pm_shutdown;
+        },
+
         .pm_failed_to_load_config => {
             log.err("failed to load config: {}", .{fatal_error});
             continue :state .pm_encountered_fatal_error;
@@ -366,6 +465,7 @@ pub fn start(self: *ProcessManager) !void {
 const Status = enum {
     pm_shutdown,
     pm_needs_to_load_initial_config,
+    pm_needs_to_load_config,
     pm_needs_to_stage_new_config,
     pm_needs_to_commit_new_config,
     pm_needs_to_apply_new_config,
@@ -376,6 +476,14 @@ const Status = enum {
     pm_failed_to_commit_config,
     pm_failed_to_apply_config,
     pm_encountered_fatal_error,
+    pm_exec_status,
+    pm_exec_start,
+    pm_exec_stop,
+    pm_exec_restart,
+    pm_exec_reload,
+    pm_reload_config_file,
+    pm_exec_dump,
+    pm_exec_quit,
 };
 
 fn shutdown(self: *ProcessManager) !void {
