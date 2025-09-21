@@ -118,6 +118,8 @@ fn commitStagedConfig(self: *ProcessManager, staged: *HashMap(*Process)) !HashMa
             const old_hash = old_proc.hash();
 
             if (staged_hash == old_hash) {
+                // ✅ keep old, destroy staged to avoid leaks
+                staged_proc.destroy(self.gpa);
                 try new_live.put(self.gpa, name, old_proc);
             } else {
                 try self.stopProcess(old_proc);
