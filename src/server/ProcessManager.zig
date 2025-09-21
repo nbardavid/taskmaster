@@ -1,13 +1,29 @@
-const ProcessManager = @This();
+const std = @import("std");
+const log = std.log;
+const mem = std.mem;
+const heap = std.heap;
+const Thread = std.Thread;
+const posix = std.posix;
+
+const AutoArrayHashMapUnmanaged = std.AutoArrayHashMapUnmanaged;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const HashMap = std.StringArrayHashMapUnmanaged;
+
+const common = @import("common");
+const Config = common.Config;
+const Process = @import("Process.zig");
+const ExitCode = Process.ExitCode;
+
+pub const ProcessManager = @This();
 
 gpa: mem.Allocator,
 config: Config,
-process_mpool: heap.MemoryPool(Process),
 live: HashMap(*Process),
 live_pid: AutoArrayHashMapUnmanaged(posix.pid_t, ProcessChild),
-thread: Thread,
+thread: ?Thread,
+stopping: std.atomic.Value(bool) = .{ .raw = false },
 
-const ProcessChild = struct {
+pub const ProcessChild = struct {
     parent: *Process,
     index: usize,
 };
@@ -16,10 +32,10 @@ pub fn init(gpa: mem.Allocator, config_file_path: []const u8) ProcessManager {
     return .{
         .gpa = gpa,
         .config = Config.init(config_file_path),
-        .process_mpool = heap.MemoryPool(Process).init(gpa),
         .live = HashMap(*Process).empty,
         .live_pid = AutoArrayHashMapUnmanaged(posix.pid_t, ProcessChild).empty,
-        .thread = undefined,
+        .thread = null,
+        .stopping = .{ .raw = false },
     };
 }
 
@@ -35,17 +51,13 @@ fn stageNewConfig(self: *ProcessManager, parsed: *Config.ParsedResult) !HashMap(
     var list: ArrayListUnmanaged(*Process) = .empty;
     defer list.deinit(self.gpa);
     errdefer {
-        for (list.items) |process| {
-            process.deinit();
-            self.process_mpool.destroy(process);
-        }
+        for (list.items) |process| process.destroy(self.gpa);
     }
     try list.ensureUnusedCapacity(self.gpa, total_processes);
 
     for (0..total_processes) |_| {
-        const process: *Process = try self.process_mpool.create();
-        process.* = .init(self.gpa);
-        list.appendAssumeCapacity(process);
+        const proc = try Process.create(self.gpa);
+        list.appendAssumeCapacity(proc);
     }
 
     var it = result_map.map.iterator();
@@ -54,25 +66,24 @@ fn stageNewConfig(self: *ProcessManager, parsed: *Config.ParsedResult) !HashMap(
         try list.items[i].configure(entry.key_ptr.*, entry.value_ptr);
     }
 
-    var new_staged_config: HashMap(*Process) = .empty;
-    errdefer new_staged_config.deinit(self.gpa);
+    var new_staged: HashMap(*Process) = .empty;
+    errdefer new_staged.deinit(self.gpa);
 
-    try new_staged_config.ensureUnusedCapacity(self.gpa, total_processes);
+    try new_staged.ensureUnusedCapacity(self.gpa, total_processes);
     for (list.items) |process| {
-        new_staged_config.putAssumeCapacity(process.config.name, process);
+        new_staged.putAssumeCapacity(process.config.name, process);
     }
 
-    return new_staged_config;
+    return new_staged;
 }
 
 fn cleanupStagedConfig(self: *ProcessManager, staged: *HashMap(*Process)) void {
     var it = staged.iterator();
     while (it.next()) |entry| {
-        const process_who_hasnt_been_used_or_started = entry.value_ptr.*;
-        process_who_hasnt_been_used_or_started.deinit();
-        self.process_mpool.destroy(process_who_hasnt_been_used_or_started);
+        entry.value_ptr.*.destroy(self.gpa);
     }
     staged.deinit(self.gpa);
+    staged.* = HashMap(*Process).empty;
 }
 
 fn commitStagedConfig(self: *ProcessManager, staged: *HashMap(*Process)) !HashMap(*Process) {
@@ -83,25 +94,24 @@ fn commitStagedConfig(self: *ProcessManager, staged: *HashMap(*Process)) !HashMa
     var it = staged.iterator();
     while (it.next()) |entry| {
         const name = entry.key_ptr.*;
-        const new_proc = entry.value_ptr.*;
+        const staged_proc = entry.value_ptr.*;
+
         if (self.live.get(name)) |old_proc| {
-            if (new_proc.hash() == old_proc.hash()) {
-                new_proc.deinit();
-                self.process_mpool.destroy(new_proc);
+            const staged_hash = staged_proc.hash();
+            const old_hash = old_proc.hash();
+
+            if (staged_hash == old_hash) {
                 try new_live.put(self.gpa, name, old_proc);
             } else {
                 try self.stopProcess(old_proc);
-                old_proc.deinit();
-                self.process_mpool.destroy(old_proc);
-
-                try new_live.put(self.gpa, name, new_proc);
-                if (new_proc.config.conf.autostart)
-                    try self.startProcess(new_proc);
+                try new_live.put(self.gpa, name, staged_proc);
+                if (staged_proc.config.conf.autostart)
+                    try self.startProcess(staged_proc);
             }
         } else {
-            try new_live.put(self.gpa, name, new_proc);
-            if (new_proc.config.conf.autostart)
-                try self.startProcess(new_proc);
+            try new_live.put(self.gpa, name, staged_proc);
+            if (staged_proc.config.conf.autostart)
+                try self.startProcess(staged_proc);
         }
     }
 
@@ -111,8 +121,16 @@ fn commitStagedConfig(self: *ProcessManager, staged: *HashMap(*Process)) !HashMa
         const old_proc = entry.value_ptr.*;
         if (!new_live.contains(name)) {
             try self.stopProcess(old_proc);
-            old_proc.deinit();
-            self.process_mpool.destroy(old_proc);
+            old_proc.destroy(self.gpa);
+        }
+    }
+
+    var it_staged = staged.iterator();
+    while (it_staged.next()) |entry| {
+        const name = entry.key_ptr.*;
+        const staged_proc = entry.value_ptr.*;
+        if (!new_live.contains(name)) {
+            staged_proc.destroy(self.gpa);
         }
     }
 
@@ -123,8 +141,7 @@ fn commitStagedConfig(self: *ProcessManager, staged: *HashMap(*Process)) !HashMa
 
 fn replaceProcess(self: *ProcessManager, old_proc: *Process, new_proc: *Process) !void {
     try self.stopProcess(old_proc);
-    old_proc.deinit();
-    self.process_mpool.destroy(old_proc);
+    old_proc.destroy(self.gpa);
 
     if (new_proc.config.conf.autostart) {
         try self.startProcess(new_proc);
@@ -196,16 +213,20 @@ fn applyLiveConfig(self: *ProcessManager) !void {
     }
 }
 
-pub fn start(self: *ProcessManager) !void {
+fn mainLoop(self: *ProcessManager) !void {
     var fatal_error: anyerror = undefined;
-    var current_parsed_result: Config.ParsedResult = undefined;
+    var current_parsed_result: Config.ParsedResult = .empty;
+    defer current_parsed_result.deinit();
     var new_config_staging: HashMap(*Process) = .empty;
     errdefer self.cleanupStagedConfig(&new_config_staging);
 
     state: switch (Status.pm_needs_to_load_initial_config) {
         .pm_needs_to_load_initial_config => {
+            if (self.stopping.load(.acquire)) continue :state .pm_shutdown;
+
             if (self.loadConfig()) |result| {
                 current_parsed_result = result;
+                current_parsed_result.valid = true;
                 continue :state .pm_needs_to_stage_new_config;
             } else |err| {
                 fatal_error = err;
@@ -213,6 +234,8 @@ pub fn start(self: *ProcessManager) !void {
             }
         },
         .pm_needs_to_stage_new_config => {
+            if (self.stopping.load(.acquire)) continue :state .pm_shutdown;
+
             if (self.stageNewConfig(&current_parsed_result)) |new_config| {
                 new_config_staging = new_config;
                 continue :state .pm_needs_to_commit_new_config;
@@ -222,6 +245,8 @@ pub fn start(self: *ProcessManager) !void {
             }
         },
         .pm_needs_to_commit_new_config => {
+            if (self.stopping.load(.acquire)) continue :state .pm_shutdown;
+
             if (self.commitStagedConfig(&new_config_staging)) |new_live| {
                 self.live = new_live;
                 continue :state .pm_needs_to_apply_new_config;
@@ -231,38 +256,50 @@ pub fn start(self: *ProcessManager) !void {
             }
         },
         .pm_needs_to_apply_new_config => {
+            if (self.stopping.load(.acquire)) continue :state .pm_shutdown;
+
             if (self.applyLiveConfig()) {
-                //
+                Thread.sleep(100 * std.time.ns_per_ms);
+                continue :state .pm_needs_to_apply_new_config;
             } else |err| {
                 fatal_error = err;
                 continue :state .pm_failed_to_apply_config;
             }
         },
         .pm_failed_to_load_config => {
-            log.err("failed to load config : {}", .{fatal_error});
+            log.err("failed to load config: {}", .{fatal_error});
             continue :state .pm_encountered_fatal_error;
         },
         .pm_failed_to_stage_config => {
-            log.err("failed to stage config : {}", .{fatal_error});
+            log.err("failed to stage config: {}", .{fatal_error});
             continue :state .pm_encountered_fatal_error;
         },
         .pm_failed_to_commit_config => {
-            log.err("failed to commit config : {}", .{fatal_error});
+            log.err("failed to commit config: {}", .{fatal_error});
             continue :state .pm_encountered_fatal_error;
         },
         .pm_failed_to_apply_config => {
-            log.err("failed to apply config : {}", .{fatal_error});
+            log.err("failed to apply config: {}", .{fatal_error});
             continue :state .pm_encountered_fatal_error;
         },
-
         .pm_encountered_fatal_error => {
-            log.err("failed to load config : {}", .{fatal_error});
+            log.err("fatal error in process manager: {}", .{fatal_error});
             return fatal_error;
+        },
+        .pm_shutdown => {
+            log.info("process manager loop shutting down", .{});
+            return;
         },
     }
 }
 
+pub fn start(self: *ProcessManager) !void {
+    const thread = try Thread.spawn(.{}, ProcessManager.mainLoop, .{self});
+    self.thread = thread;
+}
+
 const Status = enum {
+    pm_shutdown,
     pm_needs_to_load_initial_config,
     pm_needs_to_stage_new_config,
     pm_needs_to_commit_new_config,
@@ -282,25 +319,21 @@ fn shutdown(self: *ProcessManager) !void {
 }
 
 pub fn deinit(self: *ProcessManager) void {
+    self.stopping.store(true, .release);
+
+    if (self.thread) |t| {
+        t.join();
+        self.thread = null;
+    }
+
     self.shutdown() catch {};
-    self.process_mpool.deinit();
     self.config.deinit();
+
+    var it = self.live.iterator();
+    while (it.next()) |entry| {
+        entry.value_ptr.*.destroy(self.gpa);
+    }
+
     self.live.deinit(self.gpa);
-    self.thread.join();
+    self.live_pid.deinit(self.gpa);
 }
-
-const std = @import("std");
-const log = std.log;
-const heap = std.heap;
-const mem = std.mem;
-const Io = std.Io;
-const Thread = std.Thread;
-const posix = std.posix;
-
-const AutoArrayHashMapUnmanaged = std.AutoArrayHashMapUnmanaged;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
-const HashMap = std.StringArrayHashMapUnmanaged;
-const common = @import("common");
-const Config = common.Config;
-const Process = @import("Process.zig");
-const ExitCode = Process.ExitCode;

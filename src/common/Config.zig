@@ -26,7 +26,7 @@ pub fn parseLeaky(self: *Config, gpa: mem.Allocator) !ParsedResult {
 
     const file_content = try reader.allocRemaining(arena_instance.allocator(), .unlimited);
     file_content_hasher.update(file_content);
-    const parsed = try json.parseFromSliceLeaky(RawConfig, arena_instance.allocator(), file_content, .{});
+    const parsed = try json.parseFromSliceLeaky(Programs, arena_instance.allocator(), file_content, .{});
     return ParsedResult.init(
         arena_instance,
         parsed,
@@ -44,12 +44,15 @@ pub fn deinit(self: *Config) void {
 }
 
 pub const ParsedResult = struct {
-    arena: heap.ArenaAllocator,
-    parsed: RawConfig,
-    file_hash: u64,
-    file_content: []u8,
+    arena: heap.ArenaAllocator = undefined,
+    parsed: Programs = undefined,
+    file_hash: u64 = undefined,
+    file_content: []u8 = undefined,
+    valid: bool = false,
 
-    pub fn init(arena: heap.ArenaAllocator, parsed: RawConfig, file_content: []u8, file_hash: u64) ParsedResult {
+    pub const empty: ParsedResult = .{ .valid = false };
+
+    pub fn init(arena: heap.ArenaAllocator, parsed: Programs, file_content: []u8, file_hash: u64) ParsedResult {
         return .{
             .arena = arena,
             .parsed = parsed,
@@ -59,16 +62,18 @@ pub const ParsedResult = struct {
     }
 
     pub fn deinit(self: *ParsedResult) void {
-        self.arena.deinit();
+        if (self.valid) {
+            self.arena.deinit();
+        }
     }
 
     pub fn getResultMap(self: *ParsedResult) *json.ArrayHashMap(RawProcessConfig) {
-        return &self.parsed.processes;
+        return &self.parsed.programs;
     }
 };
 
-pub const RawConfig = struct {
-    processes: json.ArrayHashMap(RawProcessConfig),
+pub const Programs = struct {
+    programs: json.ArrayHashMap(RawProcessConfig),
 };
 
 pub const RawProcessConfig = struct {

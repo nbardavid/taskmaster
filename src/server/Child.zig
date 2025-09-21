@@ -40,15 +40,33 @@ pub fn start(
         }
     }
 
+    std.debug.print("[child.start] cmd={s}\n", .{cfg.conf.cmd});
+    for (cfg.conf.env) |e| {
+        std.debug.print("[child.start] env={s}\n", .{e});
+    }
+
     const argv = try buildArgv(cfg.conf.cmd, arena);
     const envp = try buildEnvp(cfg.conf.env, arena);
 
+    std.debug.print("[child.start] argv[0]={s}\n", .{argv.ptr[0].?});
+
     const pid = try posix.fork();
     if (pid == 0) {
+        std.debug.print("[child.start] in child, about to setup wd/umask/logs\n", .{});
+        if (cfg.conf.workingdir.len > 0) {
+            std.debug.print("[child.start] workingdir={s}\n", .{cfg.conf.workingdir});
+        }
         try setupWorkingDir(cfg.conf.workingdir);
+        std.debug.print("[child.start] umask={d}\n", .{cfg.conf.umask});
         try setupUmask(cfg.conf.umask);
         try redirectLogs(cfg);
-        posix.execveZ(argv.ptr[0].?, argv.ptr, envp.ptr) catch unreachable;
+
+        std.debug.print("[child.start] execveZ path={s}\n", .{argv.ptr[0].?});
+        const e = posix.execveZ(argv.ptr[0].?, argv.ptr, envp.ptr);
+        {
+            std.debug.print("execve failed: {any}\n", .{e});
+            std.posix.exit(127);
+        }
     }
 
     self.pid = pid;
@@ -57,6 +75,66 @@ pub fn start(
     self.exit_code = null;
     self.exit_signal = null;
     self.backoff_until = null;
+}
+
+fn buildArgv(cmd: []const u8, arena: std.mem.Allocator) ![:null]?[*:0]u8 {
+    std.debug.print("[buildArgv] cmd={s}\n", .{cmd});
+    var tokens = std.mem.tokenizeScalar(u8, cmd, ' ');
+    var count: usize = 0;
+    while (tokens.next()) |_| count += 1;
+    std.debug.print("[buildArgv] token count={d}\n", .{count});
+
+    const argv = try arena.allocSentinel(?[*:0]u8, count, null);
+
+    tokens = std.mem.tokenizeScalar(u8, cmd, ' ');
+    var i: usize = 0;
+    while (tokens.next()) |t| {
+        argv[i] = try std.fmt.allocPrintSentinel(arena, "{s}", .{t}, 0);
+        std.debug.print("[buildArgv] argv[{d}]={s}\n", .{ i, argv[i].? });
+        i += 1;
+    }
+    return argv;
+}
+
+fn buildEnvp(env: []const []const u8, arena: std.mem.Allocator) ![:null]?[*:0]u8 {
+    const envp = try arena.allocSentinel(?[*:0]u8, env.len, null);
+    for (env, 0..) |pair, i| {
+        envp[i] = try std.fmt.allocPrintSentinel(arena, "{s}", .{pair}, 0);
+        std.debug.print("[buildEnvp] envp[{d}]={s}\n", .{ i, envp[i].? });
+    }
+    return envp;
+}
+
+fn setupWorkingDir(path: []const u8) !void {
+    if (path.len == 0) return;
+    std.debug.print("[setupWorkingDir] chdir to {s}\n", .{path});
+    var buf: [std.fs.max_path_bytes:0]u8 = undefined;
+    @memset(buf[0..], 0x00);
+    @memcpy(buf[0..path.len :0], path);
+    try std.posix.chdirZ(buf[0..path.len :0]);
+}
+
+fn setupUmask(mask: usize) !void {
+    std.debug.print("[setupUmask] umask={d}\n", .{mask});
+    _ = std.c.umask(@intCast(mask));
+}
+
+fn redirectLogs(cfg: *const Process.Config) !void {
+    if (cfg.conf.stdout.len > 0) {
+        std.debug.print("[redirectLogs] stdout path={s}\n", .{cfg.conf.stdout});
+        const file = try std.fs.cwd().createFile(cfg.conf.stdout, .{ .truncate = false });
+        const fd = file.handle;
+        try std.posix.dup2(fd, std.posix.STDOUT_FILENO);
+        file.close();
+    }
+
+    if (cfg.conf.stderr.len > 0) {
+        std.debug.print("[redirectLogs] stderr path={s}\n", .{cfg.conf.stderr});
+        const file = try std.fs.cwd().createFile(cfg.conf.stderr, .{ .truncate = false });
+        const fd = file.handle;
+        try std.posix.dup2(fd, std.posix.STDERR_FILENO);
+        file.close();
+    }
 }
 
 pub fn stop(self: *Child, sig: i32, timeout_ms: usize) !void {
@@ -103,12 +181,6 @@ pub fn stop(self: *Child, sig: i32, timeout_ms: usize) !void {
 pub fn kill(self: *Child) void {
     if (self.pid) |pid| {
         _ = posix.kill(pid, posix.SIG.KILL) catch {};
-        const res = posix.waitpid(pid, posix.W.NOHANG);
-        if (res.pid != 0) {
-            const exit = decodeWaitStatus(res.status);
-            self.finalizeExit(exit.code, exit.signal);
-            return;
-        }
     }
     self.finalizeExit(null, null);
 }
@@ -160,57 +232,5 @@ fn decodeWaitStatus(status: u32) struct { code: ?u32, signal: ?u32 } {
         return .{ .code = null, .signal = posix.W.TERMSIG(status) };
     } else {
         return .{ .code = null, .signal = null };
-    }
-}
-
-fn buildArgv(cmd: []const u8, arena: std.mem.Allocator) ![:null]?[*:0]u8 {
-    var tokens = std.mem.tokenizeScalar(u8, cmd, ' ');
-    var count: usize = 0;
-    while (tokens.next()) |_| count += 1;
-
-    const argv = try arena.allocSentinel(?[*:0]u8, count, null);
-
-    tokens = std.mem.tokenizeScalar(u8, cmd, ' ');
-    var i: usize = 0;
-    while (tokens.next()) |t| {
-        argv[i] = try std.fmt.allocPrintSentinel(arena, "{s}", .{t}, 0);
-        i += 1;
-    }
-    return argv;
-}
-
-fn buildEnvp(env: []const []const u8, arena: std.mem.Allocator) ![:null]?[*:0]u8 {
-    const envp = try arena.allocSentinel(?[*:0]u8, env.len, null);
-    for (env, 0..) |pair, i| {
-        envp[i] = try std.fmt.allocPrintSentinel(arena, "{s}", .{pair}, 0);
-    }
-    return envp;
-}
-
-fn setupWorkingDir(path: []const u8) !void {
-    if (path.len == 0) return;
-    var buf: [std.fs.max_path_bytes:0]u8 = undefined;
-    @memcpy(buf[0..path.len], path);
-    buf[path.len] = 0;
-    try std.posix.chdirZ(buf[0.. :0]);
-}
-
-fn setupUmask(mask: usize) !void {
-    _ = std.c.umask(@intCast(mask));
-}
-
-fn redirectLogs(cfg: *const Process.Config) !void {
-    if (cfg.conf.stdout.len > 0) {
-        const file = try std.fs.cwd().createFile(cfg.conf.stdout, .{ .truncate = false });
-        const fd = file.handle;
-        try std.posix.dup2(fd, std.posix.STDOUT_FILENO);
-        file.close(); // parent no longer needs it
-    }
-
-    if (cfg.conf.stderr.len > 0) {
-        const file = try std.fs.cwd().createFile(cfg.conf.stderr, .{ .truncate = false });
-        const fd = file.handle;
-        try std.posix.dup2(fd, std.posix.STDERR_FILENO);
-        file.close();
     }
 }

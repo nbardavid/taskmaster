@@ -51,11 +51,15 @@ pub fn start(self: *Server, log_file_path: []const u8, unix_sock_path: []const u
         },
         .server_needs_to_init_mailbox => {
             if (server_mailbox.start()) {
-                continue :state .server_needs_to_init_process_manager;
+                continue :state .server_needs_to_stop;
             } else |err| {
                 fatal_error = err;
                 continue :state .server_encountered_mailbox_error;
             }
+        },
+        .server_needs_to_stop => {
+            Thread.sleep(std.time.ns_per_s * 10);
+            return;
         },
         .server_encountered_fatal_error => {
             log.err("Encountered fatal error {}.", .{fatal_error});
@@ -68,6 +72,7 @@ pub fn start(self: *Server, log_file_path: []const u8, unix_sock_path: []const u
 }
 
 const State = enum {
+    server_needs_to_stop,
     server_needs_to_init_logger,
     server_needs_to_init_mailbox,
     server_needs_to_init_process_manager,

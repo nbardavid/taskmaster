@@ -7,8 +7,8 @@ instances: []Child,
 retries: usize = 0,
 backoff_until: ?u64 = null,
 
-pub fn init(gpa: mem.Allocator) Process {
-    return .{
+pub fn init(self: *Process, gpa: mem.Allocator) void {
+    self.* = .{
         .arena = heap.ArenaAllocator.init(gpa),
         .config = undefined,
         .fingerprint = null,
@@ -16,6 +16,17 @@ pub fn init(gpa: mem.Allocator) Process {
         .retries = 0,
         .backoff_until = null,
     };
+}
+
+pub fn create(gpa: mem.Allocator) !*Process {
+    const self = try gpa.create(Process);
+    self.init(gpa);
+    return self;
+}
+
+pub fn destroy(self: *Process, gpa: mem.Allocator) void {
+    self.deinit();
+    gpa.destroy(self);
 }
 
 pub fn currentStatus(self: *Process) Status {

@@ -1,5 +1,13 @@
 pub fn main() !void {
-    var gpa_instance: heap.GeneralPurposeAllocator(.{}) = .init;
+    var gpa_instance = heap.GeneralPurposeAllocator(.{
+        .stack_trace_frames = 32,
+        .safety = true,
+        .thread_safe = true,
+        .never_unmap = true,
+        .retain_metadata = true,
+        .verbose_log = true,
+        .resize_stack_traces = true,
+    }){};
     defer _ = gpa_instance.deinit();
     const gpa = gpa_instance.allocator();
 

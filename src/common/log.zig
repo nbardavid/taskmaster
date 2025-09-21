@@ -96,7 +96,6 @@ pub const Logger = struct {
         self.sinks.deinit(self.gpa);
         if (self.owned_file) |*f| f.close();
         self.gpa.free(self.queue);
-        self.gpa.destroy(self);
     }
 
     pub fn addSink(self: *Self, sink: *Io.Writer) !void {
