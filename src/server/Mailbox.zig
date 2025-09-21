@@ -54,14 +54,14 @@ fn mainLoop(self: *Mailbox) !void {
 
     log.info("MAILBOX thread start: self_ptr=0x{x}", .{@intFromPtr(self)});
 
-    state: switch (State.mailbox_not_open) {
-        .mailbox_not_open => {
+    state: switch (State.mailbox_is_not_ready) {
+        .mailbox_is_not_ready => {
             log.info("state=MAILBOX_NOT_OPEN stop={} srv_null={}", .{
                 self.stopping.load(.acquire), self.server == null,
             });
             if (self.stopping.load(.acquire)) {
                 log.warn("transition to SHUTDOWN (stopping=true) from NOT_OPEN", .{});
-                continue :state .mailbox_shutdown;
+                continue :state .mailbox_needs_to_shutdown;
             }
 
             fs.cwd().deleteFile(self.unix_socket_path) catch |err| switch (err) {
@@ -115,10 +115,10 @@ fn mainLoop(self: *Mailbox) !void {
             };
             log.info("server set: srv_null={} fd={d}", .{ self.server == null, self.server.?.stream.handle });
 
-            continue :state .mailbox_wait_for_client;
+            continue :state .mailbox_wait_for_client_to_connect;
         },
 
-        .mailbox_wait_for_client => {
+        .mailbox_wait_for_client_to_connect => {
             const stop = self.stopping.load(.acquire);
             const srv_null = self.server == null;
             log.debug("state=MAILBOX_WAIT_FOR_CLIENT stop={} srv_null={}", .{ stop, srv_null });
@@ -126,7 +126,7 @@ fn mainLoop(self: *Mailbox) !void {
             if (stop or srv_null) {
                 if (stop) log.warn("WAIT -> SHUTDOWN (stopping=true)", .{});
                 if (srv_null) log.warn("WAIT -> SHUTDOWN (server=null)", .{});
-                continue :state .mailbox_shutdown;
+                continue :state .mailbox_needs_to_shutdown;
             }
 
             const fd = self.server.?.stream.handle;
@@ -140,7 +140,7 @@ fn mainLoop(self: *Mailbox) !void {
             log.debug("poll(server_fd={d}) -> rc={} revents=0x{x}", .{ fd, rc, fds[0].revents });
 
             if (rc == 0) {
-                continue :state .mailbox_wait_for_client;
+                continue :state .mailbox_wait_for_client_to_connect;
             }
 
             if ((fds[0].revents & posix.POLL.IN) != 0) {
@@ -153,7 +153,7 @@ fn mainLoop(self: *Mailbox) !void {
                         continue :state .mailbox_encountered_fatal_error;
                     };
                     self.client = connection;
-                    continue :state .mailbox_accepted_new_client;
+                    continue :state .mailbox_has_accepted_a_client;
                 } else |err| {
                     log.err("accept failed: {}", .{err});
                     fatal_error = err;
@@ -162,24 +162,24 @@ fn mainLoop(self: *Mailbox) !void {
             }
 
             log.warn("server revents=0x{x} -> restart listener", .{fds[0].revents});
-            continue :state .mailbox_shutdown;
+            continue :state .mailbox_needs_to_shutdown;
         },
 
-        .mailbox_accepted_new_client => {
+        .mailbox_has_accepted_a_client => {
             log.info("state=MAILBOX_ACCEPTED_NEW_CLIENT stop={} cli_null={}", .{
                 self.stopping.load(.acquire), self.client == null,
             });
-            if (self.stopping.load(.acquire)) continue :state .mailbox_shutdown;
+            if (self.stopping.load(.acquire)) continue :state .mailbox_needs_to_shutdown;
             client_reader = self.client.?.stream.reader(&client_buffer);
             reader = client_reader.interface();
-            continue :state .mailbox_peek_client_command;
+            continue :state .mailbox_needs_to_peek_client_command;
         },
 
-        .mailbox_peek_client_command => {
+        .mailbox_needs_to_peek_client_command => {
             log.debug("state=MAILBOX_PEEK_CLIENT_COMMAND stop={} cli_fd={}", .{
                 self.stopping.load(.acquire), self.client.?.stream.handle,
             });
-            if (self.stopping.load(.acquire)) continue :state .mailbox_shutdown;
+            if (self.stopping.load(.acquire)) continue :state .mailbox_needs_to_shutdown;
 
             var fds = [_]posix.pollfd{
                 .{ .fd = self.client.?.stream.handle, .events = posix.POLL.IN, .revents = 0 },
@@ -191,18 +191,18 @@ fn mainLoop(self: *Mailbox) !void {
                 continue :state .mailbox_encountered_read_error;
             };
 
-            if (rc == 0) continue :state .mailbox_peek_client_command;
+            if (rc == 0) continue :state .mailbox_needs_to_peek_client_command;
 
             const revents = fds[0].revents;
             if ((revents & posix.POLL.IN) != 0) {
                 if (reader.peekStruct(common.Command, builtin.cpu.arch.endian())) |command| {
                     log.info("peeked client command: {any}", .{command.cmd});
                     self.command = command;
-                    continue :state .mailbox_decode_client_command;
+                    continue :state .mailbox_needs_to_decode_client_command;
                 } else |err| switch (err) {
                     error.EndOfStream => {
                         log.info("client EOF; disconnecting", .{});
-                        continue :state .mailbox_disconnect_client;
+                        continue :state .mailbox_needs_to_disconnect_client;
                     },
                     else => {
                         log.warn("error peeking client command: {}", .{err});
@@ -214,17 +214,16 @@ fn mainLoop(self: *Mailbox) !void {
 
             if ((revents & (posix.POLL.HUP | posix.POLL.ERR)) != 0) {
                 log.info("client hangup/error (revents=0x{x}); disconnecting", .{revents});
-                continue :state .mailbox_disconnect_client;
+                continue :state .mailbox_needs_to_disconnect_client;
             }
 
-            // fallback: if we get here, just disconnect
             log.warn("unexpected client revents=0x{x}; disconnecting", .{revents});
-            continue :state .mailbox_disconnect_client;
+            continue :state .mailbox_needs_to_disconnect_client;
         },
 
-        .mailbox_decode_client_command => {
+        .mailbox_needs_to_decode_client_command => {
             log.info("state=MAILBOX_DECODE_CLIENT_COMMAND", .{});
-            if (self.stopping.load(.acquire)) continue :state .mailbox_shutdown;
+            if (self.stopping.load(.acquire)) continue :state .mailbox_needs_to_shutdown;
 
             _ = reader.discard(.limited(@sizeOf(common.Command))) catch |err| {
                 log.warn("failed to discard command header: {}", .{err});
@@ -235,7 +234,7 @@ fn mainLoop(self: *Mailbox) !void {
             switch (self.command.cmd) {
                 .dump, .quit, .status, .reload => {
                     log.info("client command: {any}", .{self.command.cmd});
-                    continue :state .mailbox_send_notification;
+                    continue :state .mailbox_needs_to_send_a_notification;
                 },
                 .start, .restart, .stop => {
                     log.info("client command: {any} (payload {d} bytes)", .{ self.command.cmd, self.command.payload_len });
@@ -244,38 +243,38 @@ fn mainLoop(self: *Mailbox) !void {
                         client_error = err;
                         continue :state .mailbox_encountered_read_error;
                     };
-                    continue :state .mailbox_send_notification;
+                    continue :state .mailbox_needs_to_send_a_notification;
                 },
             }
         },
 
-        .mailbox_send_notification => {
+        .mailbox_needs_to_send_a_notification => {
             log.debug("state=MAILBOX_SEND_NOTIFICATION", .{});
             self.bell.store(true, .release);
             log.info("bell triggered due to client command", .{});
-            continue :state .mailbox_peek_client_command;
+            continue :state .mailbox_needs_to_peek_client_command;
         },
 
         .mailbox_encountered_read_error => {
             log.warn("failed to read from client: {}", .{client_error});
-            continue :state .mailbox_disconnect_client;
+            continue :state .mailbox_needs_to_disconnect_client;
         },
 
-        .mailbox_disconnect_client => {
+        .mailbox_needs_to_disconnect_client => {
             const had_client = self.client != null;
             log.info("disconnecting client (had_client={})", .{had_client});
-            if (self.stopping.load(.acquire)) continue :state .mailbox_shutdown;
+            if (self.stopping.load(.acquire)) continue :state .mailbox_needs_to_shutdown;
             if (self.client) |*c| c.stream.close();
             self.client = null;
-            continue :state .mailbox_wait_for_client;
+            continue :state .mailbox_wait_for_client_to_connect;
         },
 
         .mailbox_encountered_fatal_error => {
             log.err("fatal error in mailbox: {}", .{fatal_error});
-            continue :state .mailbox_shutdown;
+            continue :state .mailbox_needs_to_shutdown;
         },
 
-        .mailbox_shutdown => {
+        .mailbox_needs_to_shutdown => {
             log.info("state=MAILBOX_SHUTDOWN stop={} srv_null={} cli_null={}", .{
                 self.stopping.load(.acquire), self.server == null, self.client == null,
             });
@@ -295,21 +294,21 @@ fn mainLoop(self: *Mailbox) !void {
                 return;
             } else {
                 log.info("mailbox restarting loop", .{});
-                continue :state .mailbox_not_open;
+                continue :state .mailbox_is_not_ready;
             }
         },
     }
 }
 
 const State = enum {
-    mailbox_not_open,
-    mailbox_shutdown,
-    mailbox_wait_for_client,
-    mailbox_peek_client_command,
-    mailbox_decode_client_command,
-    mailbox_disconnect_client,
-    mailbox_accepted_new_client,
     mailbox_encountered_fatal_error,
     mailbox_encountered_read_error,
-    mailbox_send_notification,
+    mailbox_has_accepted_a_client,
+    mailbox_is_not_ready,
+    mailbox_needs_to_decode_client_command,
+    mailbox_needs_to_disconnect_client,
+    mailbox_needs_to_peek_client_command,
+    mailbox_needs_to_send_a_notification,
+    mailbox_needs_to_shutdown,
+    mailbox_wait_for_client_to_connect,
 };
