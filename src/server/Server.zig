@@ -32,6 +32,9 @@ pub fn start(self: *Server, log_file_path: []const u8, unix_sock_path: []const u
     var server_mailbox: Mailbox = .init(unix_sock_path, &self.bell);
     defer server_mailbox.deinit();
 
+    var cmd: Command = undefined;
+    var cmd_payload: [256]u8 = undefined;
+
     state: switch (State.server_needs_to_init_logger) {
         .server_needs_to_init_logger => {
             if (server_logger.start()) {
@@ -51,10 +54,21 @@ pub fn start(self: *Server, log_file_path: []const u8, unix_sock_path: []const u
         },
         .server_needs_to_init_mailbox => {
             if (server_mailbox.start()) {
-                continue :state .server_needs_to_stop;
+                continue :state .server_needs_to_wait_for_command;
             } else |err| {
                 fatal_error = err;
                 continue :state .server_encountered_mailbox_error;
+            }
+        },
+        .server_needs_to_wait_for_command => {
+            if (self.checkMailbox(&server_mailbox, &cmd, &cmd_payload)) {
+                continue :state .server_needs_to_exec_new_command;
+            }
+        },
+        .server_needs_to_exec_new_command => {
+            switch (cmd.cmd) {
+                .quit => continue :state .server_needs_to_stop,
+                else => continue :state .server_needs_to_wait_for_command,
             }
         },
         .server_needs_to_stop => {
@@ -72,6 +86,8 @@ pub fn start(self: *Server, log_file_path: []const u8, unix_sock_path: []const u
 }
 
 const State = enum {
+    server_needs_to_wait_for_command,
+    server_needs_to_exec_new_command,
     server_needs_to_stop,
     server_needs_to_init_logger,
     server_needs_to_init_mailbox,
