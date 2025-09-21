@@ -2,43 +2,15 @@ const Server = @This();
 
 gpa: mem.Allocator,
 bell: std.atomic.Value(bool),
-mailbox: AsyncMailbox,
-config: Config,
-logger: *Logger,
 
 pub fn init(gpa: mem.Allocator) Server {
     return .{
         .gpa = gpa,
-        .address = undefined,
         .bell = .{ .raw = false },
-        .mailbox = undefined,
-        .config = undefined,
-        .logger = undefined,
     };
 }
 
-fn initLogger(self: *Server, log_file_path: []const u8) !*Logger {
-    const logger: *Logger = try .init(self.gpa, 32);
-    errdefer logger.deinit();
-
-    try logger.start();
-    try logger.addOwnedFileSink(log_file_path);
-    return logger;
-}
-
-fn initConfig(_: *Server, config_file_path: []const u8) !Config {
-    const config: Config = .init();
-    errdefer config.deinit();
-    try config.open(config_file_path);
-}
-
-fn initMailbox(self: *Server, unix_sock_path: []const u8) !AsyncMailbox {
-    const mailbox: AsyncMailbox = .init(unix_sock_path, &self.bell, self.logger);
-    mailbox.thread = Thread.spawn(.{}, AsyncMailbox.start, .{&self.mailbox});
-    return mailbox;
-}
-
-fn checkMailbox(self: *Server, mailbox: *AsyncMailbox, out_command: *common.Command, out_payload: *[256]u8) bool {
+fn checkMailbox(self: *Server, mailbox: *Mailbox, out_command: *common.Command, out_payload: *[256]u8) bool {
     if (self.bell.load(.acquire)) {
         out_command.* = mailbox.command;
         const payload_len = mailbox.command.payload_len;
@@ -51,38 +23,45 @@ fn checkMailbox(self: *Server, mailbox: *AsyncMailbox, out_command: *common.Comm
 pub fn start(self: *Server, log_file_path: []const u8, unix_sock_path: []const u8, config_file_path: []const u8) !void {
     var fatal_error: anyerror = undefined;
 
+    var server_logger: Logger = .init(self.gpa, log_file_path, 32);
+    defer server_logger.deinit();
+
+    var server_process_manager: ProcessManager = .init(self.gpa, config_file_path);
+    defer server_process_manager.deinit();
+
+    var server_mailbox: Mailbox = .init(unix_sock_path, &self.bell);
+    defer server_mailbox.deinit();
+
     state: switch (State.server_needs_to_init_logger) {
         .server_needs_to_init_logger => {
-            if (self.initLogger(log_file_path)) |logger| {
-                self.logger = logger;
-                continue :state .server_needs_to_init_config;
+            if (server_logger.start()) {
+                continue :state .server_needs_to_init_process_manager;
             } else |err| {
                 fatal_error = err;
                 continue :state .server_encountered_log_error;
             }
         },
-        .server_needs_to_init_config => {
-            if (self.initConfig(config_file_path)) |config| {
-                self.config = config;
+        .server_needs_to_init_process_manager => {
+            if (server_process_manager.start()) {
                 continue :state .server_needs_to_init_mailbox;
             } else |err| {
                 fatal_error = err;
-                continue :state .server_encountered_config_error;
+                continue :state .server_encountered_process_error;
             }
         },
         .server_needs_to_init_mailbox => {
-            if (self.initMailbox(unix_sock_path)) |mailbox| {
-                self.mailbox = mailbox;
+            if (server_mailbox.start()) {
                 continue :state .server_needs_to_init_process_manager;
+            } else |err| {
+                fatal_error = err;
+                continue :state .server_encountered_mailbox_error;
             }
         },
-        .server_needs_to_init_process_manager => {},
         .server_encountered_fatal_error => {
             log.err("Encountered fatal error {}.", .{fatal_error});
-            return;
+            return fatal_error;
         },
         .server_encountered_log_error => {},
-        .server_encountered_config_error => {},
         .server_encountered_mailbox_error => {},
         .server_encountered_process_error => {},
     }
@@ -90,14 +69,12 @@ pub fn start(self: *Server, log_file_path: []const u8, unix_sock_path: []const u
 
 const State = enum {
     server_needs_to_init_logger,
-    server_needs_to_init_config,
     server_needs_to_init_mailbox,
     server_needs_to_init_process_manager,
-    server_encountered_fatal_error,
     server_encountered_log_error,
-    server_encountered_config_error,
     server_encountered_mailbox_error,
     server_encountered_process_error,
+    server_encountered_fatal_error,
 };
 
 const std = @import("std");
@@ -117,5 +94,5 @@ const Config = common.Config;
 const Logger = common.Logger;
 const Command = common.Command;
 const Program = common.Program;
-const Process = common.Process;
-const AsyncMailbox = @import("AsyncMailbox.zig");
+const ProcessManager = @import("ProcessManager.zig");
+const Mailbox = @import("Mailbox.zig");

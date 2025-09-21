@@ -9,11 +9,12 @@ pub fn main() !void {
     };
     defer proc.argsFree(gpa, argv);
 
-    const config_file_path = if (argv.len == 2) argv[2][0..] else "config.json";
+    const config_file_path = if (argv.len == 2) argv[1][0..] else "config.json";
     const socket_file_path = if (argv.len == 3) argv[2][0..] else "/tmp/taskmaster.server.sock";
+    const log_file_path = "taskmaster.log";
 
     var server = Server.init(gpa);
-    server.start(socket_file_path, config_file_path) catch |err| {
+    server.start(log_file_path, socket_file_path, config_file_path) catch |err| {
         log.err("Fatal error encountered {}", .{err});
         return;
     };

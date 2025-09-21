@@ -1,7 +1,7 @@
 const std = @import("std");
 const heap = std.heap;
 const mem = std.mem;
-const Io = std.io;
+const Io = std.Io;
 const fs = std.fs;
 const TimeParts = @import("log_utils.zig").TimeParts;
 
@@ -14,7 +14,7 @@ pub const Logger = struct {
     };
 
     gpa: mem.Allocator,
-    q_cap: usize,
+    owned_file_path: []const u8,
     owned_file: ?fs.File,
     owned_writer: fs.File.Writer,
     owned_buffer: [heap.pageSize()]u8,
@@ -26,31 +26,32 @@ pub const Logger = struct {
     stopping: bool = false,
 
     queue: []?*Message,
+    q_cap: usize,
     q_head: usize = 0,
     q_tail: usize = 0,
     q_len: usize = 0,
     seq: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 
-    pub fn init(gpa: mem.Allocator, queue_capacity: usize) error{OutOfMemory}!*Self {
-        const self = try gpa.create(Self);
-        self.* = .{
+    pub fn init(gpa: mem.Allocator, log_file_path: []const u8, queue_capacity: usize) Self {
+        return .{
+            .owned_file_path = log_file_path,
             .owned_file = null,
             .owned_buffer = undefined,
             .owned_writer = undefined,
             .gpa = gpa,
             .q_cap = @max(queue_capacity, 1),
             .sinks = std.ArrayList(*Io.Writer).empty,
-            .queue = try gpa.alloc(?*Message, queue_capacity),
+            .queue = &[_]?*Message{},
         };
-        @memset(self.queue, null);
-        @memset(self.owned_buffer[0..], 0xaa);
-        return self;
     }
 
     pub fn start(self: *Self) !void {
         self.lock.lock();
         self.stopping = false;
         self.lock.unlock();
+        self.queue = try self.gpa.alloc(?*Message, self.q_cap);
+        @memset(self.queue, null);
+        @memset(self.owned_buffer[0..], 0xaa);
         self.thread = try std.Thread.spawn(.{}, worker, .{self});
     }
 

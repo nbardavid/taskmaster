@@ -1,15 +1,17 @@
 pub const Config = @This();
 
 config_file: fs.File,
+config_file_path: []const u8,
 
-pub fn init() Config {
+pub fn init(config_file_path: []const u8) Config {
     return .{
         .config_file = undefined,
+        .config_file_path = config_file_path,
     };
 }
 
-pub fn open(self: *Config, config_file_path: []const u8) !void {
-    self.config_file = try fs.cwd().openFile(config_file_path, .{ .mode = .read_only });
+pub fn open(self: *Config) !void {
+    self.config_file = try fs.cwd().openFile(self.config_file_path, .{ .mode = .read_only });
 }
 
 pub fn parseLeaky(self: *Config, gpa: mem.Allocator) !ParsedResult {
@@ -20,11 +22,11 @@ pub fn parseLeaky(self: *Config, gpa: mem.Allocator) !ParsedResult {
 
     var file_buffer: [1024]u8 = undefined;
     var file_reader: fs.File.Reader = self.config_file.reader(&file_buffer);
-    const reader: *Io.Reader = file_reader.interface();
+    const reader: *Io.Reader = &file_reader.interface;
 
     const file_content = try reader.allocRemaining(arena_instance.allocator(), .unlimited);
     file_content_hasher.update(file_content);
-    const parsed: json.Parsed(RawConfig) = try json.parseFromSliceLeaky(RawConfig, arena_instance.allocator(), file_content, .{});
+    const parsed = try json.parseFromSliceLeaky(RawConfig, arena_instance.allocator(), file_content, .{});
     return ParsedResult.init(
         arena_instance,
         parsed,
@@ -43,11 +45,11 @@ pub fn deinit(self: *Config) void {
 
 pub const ParsedResult = struct {
     arena: heap.ArenaAllocator,
-    parsed: json.Parsed(RawConfig),
+    parsed: RawConfig,
     file_hash: u64,
     file_content: []u8,
 
-    pub fn init(arena: heap.ArenaAllocator, parsed: json.Parsed(RawConfig), file_content: []u8, file_hash: u64) ParsedResult {
+    pub fn init(arena: heap.ArenaAllocator, parsed: RawConfig, file_content: []u8, file_hash: u64) ParsedResult {
         return .{
             .arena = arena,
             .parsed = parsed,
@@ -60,18 +62,13 @@ pub const ParsedResult = struct {
         self.arena.deinit();
     }
 
-    pub fn getResultMap(self: *ParsedResult) *json.ArrayHashMap(RawProcess) {
-        return &self.parsed.value.processes;
+    pub fn getResultMap(self: *ParsedResult) *json.ArrayHashMap(RawProcessConfig) {
+        return &self.parsed.processes;
     }
 };
 
 pub const RawConfig = struct {
-    processes: json.ArrayHashMap(RawProcess),
-};
-
-pub const RawProcess = struct {
-    name: []const u8,
-    conf: RawProcessConfig,
+    processes: json.ArrayHashMap(RawProcessConfig),
 };
 
 pub const RawProcessConfig = struct {
