@@ -2,11 +2,11 @@
     "programs": {
         "taskmaster_foo": {
             "cmd": "/usr/bin/taskmaster_foo",
-            "numprocs": 3,
+            "numprocs": 8,
             "stdout": "/dev/null",
             "stderr": "/dev/null",
             "autostart": true,
-            "autorestart": "never",
+            "autorestart": "always",
             "exitcodes": [0, 2, 15],
             "starttime": 3,
             "startretries": 3,

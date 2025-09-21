@@ -33,6 +33,7 @@ const State = enum {
     client_encountered_fatal_error,
     client_encountered_write_error,
     client_needs_to_disconnect,
+    client_resend_pending,
 };
 
 pub fn main() !void {
@@ -62,6 +63,8 @@ pub fn main() !void {
     var server_buffer: [1024]u8 = undefined;
     var server_writer: net.Stream.Writer = undefined;
     var server_stream: net.Stream = undefined;
+    var pending_command: ?Command = null;
+    var pending_payload: []const u8 = "";
 
     log.info("client started (server path={s})", .{server_path});
 
@@ -83,9 +86,17 @@ pub fn main() !void {
 
             .client_connected_to_server => {
                 log.info("state=CLIENT_CONNECTED", .{});
-                log.info("client is connected to server at {s}", .{server_path});
                 server_writer = server_stream.writer(&server_buffer);
-                continue :state .client_fetch_inputs;
+
+                if (pending_command) |pcmd| {
+                    log.info("have pending command {any}, resending", .{pcmd.cmd});
+                    client_command = pcmd;
+                    client_command_payload = pending_payload;
+                    pending_command = null;
+                    continue :state .client_route_command;
+                } else {
+                    continue :state .client_fetch_inputs;
+                }
             },
 
             .client_fetch_inputs => {
@@ -138,6 +149,8 @@ pub fn main() !void {
                     log.info("sent simple command {any}", .{client_command.cmd});
                     continue :state .client_flush_command;
                 } else |err| {
+                    pending_command = client_command;
+                    pending_payload = client_command_payload;
                     log.warn("failed to send simple command: {}", .{err});
                     continue :state .client_needs_to_disconnect;
                 }
@@ -150,6 +163,8 @@ pub fn main() !void {
                     log.info("sent command struct {any}, now sending payload", .{client_command.cmd});
                     continue :state .client_send_payload;
                 } else |err| {
+                    pending_command = client_command;
+                    pending_payload = client_command_payload;
                     log.warn("failed to send command struct: {}", .{err});
                     continue :state .client_needs_to_disconnect;
                 }
@@ -162,6 +177,8 @@ pub fn main() !void {
                     log.info("sent payload of {d} bytes", .{client_command_payload.len});
                     continue :state .client_flush_command;
                 } else |err| {
+                    pending_command = client_command;
+                    pending_payload = client_command_payload;
                     log.warn("failed to send payload: {}", .{err});
                     continue :state .client_needs_to_disconnect;
                 }
@@ -174,6 +191,8 @@ pub fn main() !void {
                     log.info("command flush succeeded", .{});
                     continue :state .client_fetch_inputs;
                 } else |err| {
+                    pending_command = client_command;
+                    pending_payload = client_command_payload;
                     log.warn("failed to flush command: {}", .{err});
                     continue :state .client_needs_to_disconnect;
                 }

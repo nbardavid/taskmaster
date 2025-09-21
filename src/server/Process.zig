@@ -166,6 +166,7 @@ pub fn isExpectedExitCode(self: *Process, code: u32) bool {
 }
 
 pub fn configure(self: *Process, process_name: []const u8, process_config: *RawProcessConfig) !void {
+    _ = self.arena.reset(.free_all);
     self.fingerprint = null;
     const arena = self.arena.allocator();
 
