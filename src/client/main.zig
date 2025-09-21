@@ -43,17 +43,13 @@ pub fn main() !void {
     var stdout_buffer: [heap.pageSize()]u8 = undefined;
     var stdout_writer: fs.File.Writer = fs.File.stdout().writer(&stdout_buffer);
 
-    var argv = proc.argsAlloc(gpa) catch |err| {
+    const argv = proc.argsAlloc(gpa) catch |err| {
         log.err("Fatal error encountered {}", .{err});
         return;
     };
     defer proc.argsFree(gpa, argv);
 
-    const server_path =
-        if (argv.len == 2)
-            argv[1][0..]
-        else
-            "/tmp/taskmaster.server.sock";
+    const server_path = "/tmp/taskmaster.server.sock";
 
     var shell: Shell = .init(gpa, &stdout_writer.interface);
     defer shell.deinit();
@@ -67,105 +63,148 @@ pub fn main() !void {
     var server_writer: net.Stream.Writer = undefined;
     var server_stream: net.Stream = undefined;
 
+    log.info("client started (server path={s})", .{server_path});
+
     // state machine.
     {
         state: switch (State.client_disconnected_from_server) {
             .client_disconnected_from_server => {
+                log.info("state=CLIENT_DISCONNECTED", .{});
                 if (connectToServer(server_path, max_try_conn)) |stream| {
+                    log.info("connected to server socket", .{});
                     server_stream = stream;
                     continue :state .client_connected_to_server;
                 } else |err| {
+                    log.err("failed to connect to server: {}", .{err});
                     client_fatal_error = err;
                     continue :state .client_encountered_fatal_error;
                 }
             },
+
             .client_connected_to_server => {
+                log.info("state=CLIENT_CONNECTED", .{});
                 log.info("client is connected to server at {s}", .{server_path});
                 server_writer = server_stream.writer(&server_buffer);
                 continue :state .client_fetch_inputs;
             },
+
             .client_fetch_inputs => {
+                log.debug("state=CLIENT_FETCH_INPUTS", .{});
                 if (shell.readline("taskmaster |>")) |line| {
+                    log.debug("user input received: \"{s}\"", .{line});
                     client_input = line;
                     continue :state .client_parse_inputs;
                 } else |err| {
+                    log.err("readline failed: {}", .{err});
                     client_fatal_error = err;
                     continue :state .client_encountered_fatal_error;
                 }
             },
+
             .client_parse_inputs => {
+                log.debug("state=CLIENT_PARSE_INPUTS input=\"{s}\"", .{client_input});
                 var it = mem.tokenizeScalar(u8, client_input, ' ');
                 const first_token = it.next() orelse "";
                 client_command_payload = it.next() orelse "";
 
                 if (parseCommand(first_token, client_command_payload)) |valid| {
                     client_command = valid;
+                    log.info("parsed command={any} payload_len={d}", .{
+                        client_command.cmd, client_command.payload_len,
+                    });
                     continue :state .client_route_command;
                 } else |err| {
+                    log.warn("invalid command: \"{s}\" ({})", .{ first_token, err });
                     client_fatal_error = err;
                     continue :state .client_received_invalid_command;
                 }
             },
+
             .client_route_command => {
-                if (client_command.payload_len != 0)
-                    continue :state .client_send_command_and_payload
-                else
+                log.debug("state=CLIENT_ROUTE_COMMAND", .{});
+                if (client_command.payload_len != 0) {
+                    log.info("routing to SEND_COMMAND_AND_PAYLOAD", .{});
+                    continue :state .client_send_command_and_payload;
+                } else {
+                    log.info("routing to SEND_SIMPLE_COMMAND", .{});
                     continue :state .client_send_simple_command;
+                }
             },
+
             .client_send_simple_command => {
+                log.debug("state=CLIENT_SEND_SIMPLE_COMMAND", .{});
                 const writer = &server_writer.interface;
                 if (writer.writeStruct(client_command, builtin.cpu.arch.endian())) {
+                    log.info("sent simple command {any}", .{client_command.cmd});
                     continue :state .client_flush_command;
                 } else |err| {
-                    log.warn("failed to send command to server : {}", .{err});
+                    log.warn("failed to send simple command: {}", .{err});
                     continue :state .client_needs_to_disconnect;
                 }
             },
+
             .client_send_command_and_payload => {
+                log.debug("state=CLIENT_SEND_COMMAND_AND_PAYLOAD", .{});
                 const writer = &server_writer.interface;
                 if (writer.writeStruct(client_command, builtin.cpu.arch.endian())) {
+                    log.info("sent command struct {any}, now sending payload", .{client_command.cmd});
                     continue :state .client_send_payload;
                 } else |err| {
-                    log.warn("failed to send command to server : {}", .{err});
+                    log.warn("failed to send command struct: {}", .{err});
                     continue :state .client_needs_to_disconnect;
                 }
             },
+
             .client_send_payload => {
+                log.debug("state=CLIENT_SEND_PAYLOAD", .{});
                 const writer = &server_writer.interface;
                 if (writer.writeAll(client_command_payload)) {
+                    log.info("sent payload of {d} bytes", .{client_command_payload.len});
                     continue :state .client_flush_command;
                 } else |err| {
-                    log.warn("failed to send command payload to server : {}", .{err});
+                    log.warn("failed to send payload: {}", .{err});
                     continue :state .client_needs_to_disconnect;
                 }
             },
+
             .client_flush_command => {
+                log.debug("state=CLIENT_FLUSH_COMMAND", .{});
                 const writer = &server_writer.interface;
                 if (writer.flush()) {
+                    log.info("command flush succeeded", .{});
                     continue :state .client_fetch_inputs;
                 } else |err| {
-                    log.warn("failed to flush command to server : {}", .{err});
+                    log.warn("failed to flush command: {}", .{err});
                     continue :state .client_needs_to_disconnect;
                 }
             },
+
             .client_needs_to_disconnect => {
+                log.warn("state=CLIENT_DISCONNECT: closing stream", .{});
                 server_stream.close();
                 server_writer = undefined;
                 continue :state .client_disconnected_from_server;
             },
+
             .client_received_invalid_command => {
-                log.info("failed to recognize : {s} not a command.", .{client_input});
+                log.info("state=CLIENT_INVALID_COMMAND input=\"{s}\"", .{client_input});
                 continue :state .client_fetch_inputs;
             },
+
             .client_encountered_fatal_error => {
-                log.err("fatal error encountered : {}", .{client_fatal_error});
+                log.err("state=CLIENT_FATAL_ERROR: {}", .{client_fatal_error});
                 return;
             },
+
             .client_encountered_write_error => {
-                log.warn("failed to write command to server : {}", .{client_fatal_error});
+                log.warn("state=CLIENT_WRITE_ERROR: {}", .{client_fatal_error});
                 continue :state .client_needs_to_disconnect;
             },
-            else => continue :state .client_can_exit,
+
+            else => {
+                log.info("state=CLIENT_CAN_EXIT", .{});
+                continue :state .client_can_exit;
+            },
         }
     }
 }

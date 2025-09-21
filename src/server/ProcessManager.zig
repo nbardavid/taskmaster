@@ -22,6 +22,9 @@ live: HashMap(*Process),
 live_pid: AutoArrayHashMapUnmanaged(posix.pid_t, ProcessChild),
 thread: ?Thread,
 stopping: std.atomic.Value(bool) = .{ .raw = false },
+new_cmd: std.atomic.Value(bool) = .{ .raw = false },
+cmd: common.Command,
+cmd_payload: [256]u8,
 
 pub const ProcessChild = struct {
     parent: *Process,
@@ -36,7 +39,21 @@ pub fn init(gpa: mem.Allocator, config_file_path: []const u8) ProcessManager {
         .live_pid = AutoArrayHashMapUnmanaged(posix.pid_t, ProcessChild).empty,
         .thread = null,
         .stopping = .{ .raw = false },
+        .new_cmd = .{ .raw = false },
+        .cmd = undefined,
+        .cmd_payload = undefined,
     };
+}
+
+fn checkForNewCommand(self: *ProcessManager, out_cmd: *common.Command, out_cmd_payload: *[256]u8) bool {
+    if (self.new_cmd.load(.acquire)) {
+        out_cmd.* = self.cmd;
+        const payload_len = self.cmd.payload_len;
+        @memcpy(out_cmd_payload[0..payload_len], self.cmd_payload[0..payload_len]);
+        self.new_cmd.store(false, .monotonic);
+        return true;
+    }
+    return false;
 }
 
 fn loadConfig(self: *ProcessManager) !Config.ParsedResult {
@@ -219,52 +236,100 @@ fn mainLoop(self: *ProcessManager) !void {
     defer current_parsed_result.deinit();
     var new_config_staging: HashMap(*Process) = .empty;
     errdefer self.cleanupStagedConfig(&new_config_staging);
+    var local_command: common.Command = undefined;
+    var local_command_payload: [256]u8 = undefined;
 
     state: switch (Status.pm_needs_to_load_initial_config) {
         .pm_needs_to_load_initial_config => {
+            log.info("state=LOAD_INITIAL_CONFIG", .{});
             if (self.stopping.load(.acquire)) continue :state .pm_shutdown;
 
             if (self.loadConfig()) |result| {
+                log.info("config loaded successfully", .{});
                 current_parsed_result = result;
                 current_parsed_result.valid = true;
                 continue :state .pm_needs_to_stage_new_config;
             } else |err| {
+                log.err("config load failed: {}", .{err});
                 fatal_error = err;
                 continue :state .pm_failed_to_load_config;
             }
         },
         .pm_needs_to_stage_new_config => {
+            log.info("state=STAGE_NEW_CONFIG", .{});
             if (self.stopping.load(.acquire)) continue :state .pm_shutdown;
 
             if (self.stageNewConfig(&current_parsed_result)) |new_config| {
+                log.info("staged new config successfully ({} processes)", .{new_config.count()});
                 new_config_staging = new_config;
                 continue :state .pm_needs_to_commit_new_config;
             } else |err| {
+                log.err("staging config failed: {}", .{err});
                 fatal_error = err;
                 continue :state .pm_failed_to_stage_config;
             }
         },
         .pm_needs_to_commit_new_config => {
+            log.info("state=COMMIT_NEW_CONFIG", .{});
             if (self.stopping.load(.acquire)) continue :state .pm_shutdown;
 
             if (self.commitStagedConfig(&new_config_staging)) |new_live| {
+                log.info("committed new config ({} live processes)", .{new_live.count()});
                 self.live = new_live;
                 continue :state .pm_needs_to_apply_new_config;
             } else |err| {
+                log.err("commit config failed: {}", .{err});
                 fatal_error = err;
                 continue :state .pm_failed_to_commit_config;
             }
         },
         .pm_needs_to_apply_new_config => {
+            log.debug("state=APPLY_NEW_CONFIG", .{});
             if (self.stopping.load(.acquire)) continue :state .pm_shutdown;
 
             if (self.applyLiveConfig()) {
-                Thread.sleep(100 * std.time.ns_per_ms);
-                continue :state .pm_needs_to_apply_new_config;
+                log.debug("applied live config successfully", .{});
+                continue :state .pm_needs_to_wait_for_commands;
             } else |err| {
+                log.err("apply config failed: {}", .{err});
                 fatal_error = err;
                 continue :state .pm_failed_to_apply_config;
             }
+        },
+        .pm_needs_to_wait_for_commands => {
+            if (self.stopping.load(.acquire)) continue :state .pm_shutdown;
+            if (self.checkForNewCommand(&local_command, &local_command_payload)) {
+                continue :state .pm_needs_to_exec_command;
+            } else {
+                Thread.sleep(std.time.ns_per_ms);
+                continue :state .pm_needs_to_wait_for_commands;
+            }
+        },
+        .pm_needs_to_exec_command => {
+            switch (local_command.cmd) {
+                .dump => {
+                    log.info("dump\n", .{});
+                },
+                .quit => {
+                    log.info("quit\n", .{});
+                },
+                .reload => {
+                    log.info("reload\n", .{});
+                },
+                .restart => {
+                    log.info("restart\n", .{});
+                },
+                .start => {
+                    log.info("start\n", .{});
+                },
+                .status => {
+                    log.info("status\n", .{});
+                },
+                .stop => {
+                    log.info("stop\n", .{});
+                },
+            }
+            continue :state .pm_needs_to_wait_for_commands;
         },
         .pm_failed_to_load_config => {
             log.err("failed to load config: {}", .{fatal_error});
@@ -304,6 +369,8 @@ const Status = enum {
     pm_needs_to_stage_new_config,
     pm_needs_to_commit_new_config,
     pm_needs_to_apply_new_config,
+    pm_needs_to_wait_for_commands,
+    pm_needs_to_exec_command,
     pm_failed_to_load_config,
     pm_failed_to_stage_config,
     pm_failed_to_commit_config,
