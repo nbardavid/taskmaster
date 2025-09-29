@@ -46,9 +46,12 @@ pub fn main() !void {
     const socket_file_path = if (argv.len == 3) argv[2][0..] else "/tmp/taskmaster.server.sock";
     const log_file_path = "taskmaster.log";
 
-    var server = Server.init(gpa);
-    server.start(log_file_path, socket_file_path, config_file_path) catch |err| {
-        log.err("Fatal error encountered {}", .{err});
+    var logger = Logger.init(gpa, log_file_path);
+    defer logger.deinit();
+
+    var server = Server.init(gpa, &logger);
+    server.start(socket_file_path, config_file_path) catch |err| {
+        logger.err("Fatal error encountered {}", .{err});
         return;
     };
 }

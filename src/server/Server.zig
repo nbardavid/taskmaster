@@ -2,11 +2,13 @@ const Server = @This();
 
 gpa: mem.Allocator,
 bell: std.atomic.Value(bool),
+logger: *Logger = undefined,
 
-pub fn init(gpa: mem.Allocator) Server {
+pub fn init(gpa: mem.Allocator, logger: *Logger) Server {
     return .{
         .gpa = gpa,
         .bell = .{ .raw = false },
+        .logger = logger,
     };
 }
 
@@ -28,16 +30,14 @@ fn sendCommand(process_manager: *ProcessManager, cmd: Command, cmd_payload: *[25
     log.info("server: queued command {any} for process manager", .{cmd.cmd});
 }
 
-pub fn start(self: *Server, log_file_path: []const u8, unix_sock_path: []const u8, config_file_path: []const u8) !void {
+pub fn start(self: *Server, unix_sock_path: []const u8, config_file_path: []const u8) !void {
     var fatal_error: anyerror = undefined;
 
-    var logger: Logger = .init(self.gpa, log_file_path);
-    defer logger.deinit();
-
-    var process_manager: ProcessManager = .init(self.gpa, config_file_path);
+    const logger = self.logger;
+    var process_manager: ProcessManager = .init(self.gpa, config_file_path, logger);
     defer process_manager.deinit();
 
-    var mailbox: Mailbox = .init(unix_sock_path, &self.bell);
+    var mailbox: Mailbox = .init(unix_sock_path, &self.bell, logger);
     defer mailbox.deinit();
 
     var cmd: Command = undefined;

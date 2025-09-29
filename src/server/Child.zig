@@ -2,7 +2,9 @@ const std = @import("std");
 const posix = std.posix;
 const fs = std.fs;
 const time = std.time;
+const common = @import("common");
 const Process = @import("Process.zig");
+const Logger = common.Logger;
 
 pub const Child = @This();
 
@@ -23,9 +25,12 @@ last_start_time: u64 = 0,
 backoff_until: ?u64 = null,
 exit_code: ?u32 = null,
 exit_signal: ?u32 = null,
+logger: *Logger,
 
-pub fn init() Child {
-    return .{};
+pub fn init(logger: *Logger) Child {
+    return .{
+        .logger = logger,
+    };
 }
 
 pub fn start(
@@ -33,6 +38,7 @@ pub fn start(
     cfg: *const Process.Config,
     arena: std.mem.Allocator,
 ) !void {
+    const logger = self.logger;
     const now = time.milliTimestamp();
     if (self.status == .backoff) {
         if (self.backoff_until) |until| {
@@ -40,31 +46,31 @@ pub fn start(
         }
     }
 
-    std.debug.print("[child.start] cmd={s}\n", .{cfg.conf.cmd});
+    logger.info("[child.start] cmd={s}\n", .{cfg.conf.cmd});
     for (cfg.conf.env) |e| {
-        std.debug.print("[child.start] env={s}\n", .{e});
+        logger.info("[child.start] env={s}\n", .{e});
     }
 
     const argv = try buildArgv(cfg.conf.cmd, arena);
     const envp = try buildEnvp(cfg.conf.env, arena);
 
-    std.debug.print("[child.start] argv[0]={s}\n", .{argv.ptr[0].?});
+    logger.info("[child.start] argv[0]={s}\n", .{argv.ptr[0].?});
 
     const pid = try posix.fork();
     if (pid == 0) {
-        std.debug.print("[child.start] in child, about to setup wd/umask/logs\n", .{});
+        logger.info("[child.start] in child, about to setup wd/umask/logs\n", .{});
         if (cfg.conf.workingdir.len > 0) {
-            std.debug.print("[child.start] workingdir={s}\n", .{cfg.conf.workingdir});
+            logger.info("[child.start] workingdir={s}\n", .{cfg.conf.workingdir});
         }
         try setupWorkingDir(cfg.conf.workingdir);
-        std.debug.print("[child.start] umask={d}\n", .{cfg.conf.umask});
+        logger.info("[child.start] umask={d}\n", .{cfg.conf.umask});
         try setupUmask(cfg.conf.umask);
         try redirectLogs(cfg);
 
-        std.debug.print("[child.start] execveZ path={s}\n", .{argv.ptr[0].?});
+        logger.info("[child.start] execveZ path={s}\n", .{argv.ptr[0].?});
         const e = posix.execveZ(argv.ptr[0].?, argv.ptr, envp.ptr);
         {
-            std.debug.print("execve failed: {any}\n", .{e});
+            logger.info("execve failed: {any}\n", .{e});
             std.posix.exit(127);
         }
     }
@@ -78,11 +84,9 @@ pub fn start(
 }
 
 fn buildArgv(cmd: []const u8, arena: std.mem.Allocator) ![:null]?[*:0]u8 {
-    std.debug.print("[buildArgv] cmd={s}\n", .{cmd});
     var tokens = std.mem.tokenizeScalar(u8, cmd, ' ');
     var count: usize = 0;
     while (tokens.next()) |_| count += 1;
-    std.debug.print("[buildArgv] token count={d}\n", .{count});
 
     const argv = try arena.allocSentinel(?[*:0]u8, count, null);
 
@@ -90,7 +94,6 @@ fn buildArgv(cmd: []const u8, arena: std.mem.Allocator) ![:null]?[*:0]u8 {
     var i: usize = 0;
     while (tokens.next()) |t| {
         argv[i] = try std.fmt.allocPrintSentinel(arena, "{s}", .{t}, 0);
-        std.debug.print("[buildArgv] argv[{d}]={s}\n", .{ i, argv[i].? });
         i += 1;
     }
     return argv;
@@ -100,14 +103,12 @@ fn buildEnvp(env: []const []const u8, arena: std.mem.Allocator) ![:null]?[*:0]u8
     const envp = try arena.allocSentinel(?[*:0]u8, env.len, null);
     for (env, 0..) |pair, i| {
         envp[i] = try std.fmt.allocPrintSentinel(arena, "{s}", .{pair}, 0);
-        std.debug.print("[buildEnvp] envp[{d}]={s}\n", .{ i, envp[i].? });
     }
     return envp;
 }
 
 fn setupWorkingDir(path: []const u8) !void {
     if (path.len == 0) return;
-    std.debug.print("[setupWorkingDir] chdir to {s}\n", .{path});
     var buf: [std.fs.max_path_bytes:0]u8 = undefined;
     @memset(buf[0..], 0x00);
     @memcpy(buf[0..path.len :0], path);
@@ -115,13 +116,11 @@ fn setupWorkingDir(path: []const u8) !void {
 }
 
 fn setupUmask(mask: usize) !void {
-    std.debug.print("[setupUmask] umask={d}\n", .{mask});
     _ = std.c.umask(@intCast(mask));
 }
 
 fn redirectLogs(cfg: *const Process.Config) !void {
     if (cfg.conf.stdout.len > 0) {
-        std.debug.print("[redirectLogs] stdout path={s}\n", .{cfg.conf.stdout});
         const file = try std.fs.cwd().createFile(cfg.conf.stdout, .{ .truncate = false });
         const fd = file.handle;
         try std.posix.dup2(fd, std.posix.STDOUT_FILENO);

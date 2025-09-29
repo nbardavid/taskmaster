@@ -1,5 +1,4 @@
 const std = @import("std");
-const log = std.log;
 const mem = std.mem;
 const heap = std.heap;
 const Thread = std.Thread;
@@ -10,6 +9,7 @@ const HashMap = std.StringArrayHashMapUnmanaged;
 
 const common = @import("common");
 const Config = common.Config;
+const Logger = common.Logger;
 
 const Process = @import("Process.zig");
 const ExitCode = Process.ExitCode;
@@ -26,13 +26,14 @@ stopping: std.atomic.Value(bool) = .{ .raw = false },
 new_cmd: std.atomic.Value(bool) = .{ .raw = false },
 cmd: common.Command,
 cmd_payload: [256]u8,
+logger: *Logger,
 
 pub const ProcessChild = struct {
     parent: *Process,
     index: usize,
 };
 
-pub fn init(gpa: mem.Allocator, config_file_path: []const u8) ProcessManager {
+pub fn init(gpa: mem.Allocator, config_file_path: []const u8, logger: *Logger) ProcessManager {
     return .{
         .gpa = gpa,
         .config = Config.init(config_file_path),
@@ -43,6 +44,7 @@ pub fn init(gpa: mem.Allocator, config_file_path: []const u8) ProcessManager {
         .new_cmd = .{ .raw = false },
         .cmd = undefined,
         .cmd_payload = undefined,
+        .logger = logger,
     };
 }
 
@@ -99,7 +101,7 @@ fn stageNewConfig(self: *ProcessManager, parsed: *Config.ParsedResult) !HashMap(
     try list.ensureUnusedCapacity(self.gpa, total_processes);
 
     for (0..total_processes) |_| {
-        const proc = try Process.create(self.gpa);
+        const proc = try Process.create(self.gpa, self.logger);
         list.appendAssumeCapacity(proc);
     }
 
@@ -229,10 +231,8 @@ fn manageProcess(self: *ProcessManager, proc: *Process) !void {
     const now: u64 = @intCast(std.time.milliTimestamp());
 
     for (proc.instances, 0..) |*child, i| {
-        // Always poll for child process status changes first
         if (child.pid) |pid| {
             if (try child.poll()) |_| {
-                // Child process has exited, remove from live_pid tracking
                 self.removeLivePid(pid);
             }
         }
@@ -242,7 +242,6 @@ fn manageProcess(self: *ProcessManager, proc: *Process) !void {
                 if ((now - child.last_start_time) >= (proc.config.conf.starttime * 1000)) {
                     child.status = .running;
                 }
-                // Note: .starting -> .exited transition is handled by polling above
             },
             .backoff => {
                 // Handle backoff expiration
@@ -313,6 +312,7 @@ fn applyLiveConfig(self: *ProcessManager) !void {
 }
 
 fn mainLoop(self: *ProcessManager) !void {
+    const logger = self.logger;
     var fatal_error: anyerror = undefined;
     var current_parsed_result: Config.ParsedResult = .empty;
     defer current_parsed_result.deinit();
@@ -323,23 +323,23 @@ fn mainLoop(self: *ProcessManager) !void {
 
     state: switch (Status.process_manager_needs_to_load_the_inial_config) {
         .process_manager_needs_to_load_the_inial_config => {
-            log.info("state=LOAD_INITIAL_CONFIG", .{});
+            logger.info("state=LOAD_INITIAL_CONFIG", .{});
             if (self.stopping.load(.acquire)) continue :state .process_manager_needs_to_shutdown;
 
             if (self.loadConfig()) |result| {
-                log.info("config loaded successfully", .{});
+                logger.info("config loaded successfully", .{});
                 current_parsed_result = result;
                 current_parsed_result.valid = true;
                 continue :state .process_manager_needs_to_stage_the_new_config;
             } else |err| {
-                log.err("config load failed: {}", .{err});
+                logger.err("config load failed: {}", .{err});
                 fatal_error = err;
                 continue :state .process_manager_failed_to_load_config;
             }
         },
 
         .process_manager_needs_to_load_a_config => {
-            log.info("state=LOAD_CONFIG", .{});
+            logger.info("state=LOAD_CONFIG", .{});
             if (self.stopping.load(.acquire)) continue :state .process_manager_needs_to_shutdown;
 
             current_parsed_result.deinit();
@@ -347,56 +347,56 @@ fn mainLoop(self: *ProcessManager) !void {
             current_parsed_result.valid = false;
 
             if (self.config.parseLeaky(self.gpa)) |result| {
-                log.info("config loaded successfully", .{});
+                logger.info("config loaded successfully", .{});
                 current_parsed_result = result;
                 current_parsed_result.valid = true;
                 continue :state .process_manager_needs_to_stage_the_new_config;
             } else |err| {
-                log.err("config load failed: {}", .{err});
+                logger.err("config load failed: {}", .{err});
                 fatal_error = err;
                 continue :state .process_manager_failed_to_load_config;
             }
         },
 
         .process_manager_needs_to_stage_the_new_config => {
-            log.info("state=STAGE_NEW_CONFIG", .{});
+            logger.info("state=STAGE_NEW_CONFIG", .{});
             if (self.stopping.load(.acquire)) continue :state .process_manager_needs_to_shutdown;
 
             if (self.stageNewConfig(&current_parsed_result)) |new_config| {
-                log.info("staged new config successfully ({} processes)", .{new_config.count()});
+                logger.info("staged new config successfully ({} processes)", .{new_config.count()});
                 new_config_staging = new_config;
                 continue :state .process_manager_needs_to_commit_the_new_config;
             } else |err| {
-                log.err("staging config failed: {}", .{err});
+                logger.err("staging config failed: {}", .{err});
                 fatal_error = err;
                 continue :state .process_manager_failed_to_stage_config;
             }
         },
 
         .process_manager_needs_to_commit_the_new_config => {
-            log.info("state=COMMIT_NEW_CONFIG", .{});
+            logger.info("state=COMMIT_NEW_CONFIG", .{});
             if (self.stopping.load(.acquire)) continue :state .process_manager_needs_to_shutdown;
 
             if (self.commitStagedConfig(&new_config_staging)) |new_live| {
-                log.info("committed new config ({} live processes)", .{new_live.count()});
+                logger.info("committed new config ({} live processes)", .{new_live.count()});
                 self.live = new_live;
                 continue :state .process_manager_needs_to_apply_the_new_config;
             } else |err| {
-                log.err("commit config failed: {}", .{err});
+                logger.err("commit config failed: {}", .{err});
                 fatal_error = err;
                 continue :state .process_manager_failed_to_commit_config;
             }
         },
 
         .process_manager_needs_to_apply_the_new_config => {
-            log.debug("state=APPLY_NEW_CONFIG", .{});
+            logger.debug("state=APPLY_NEW_CONFIG", .{});
             if (self.stopping.load(.acquire)) continue :state .process_manager_needs_to_shutdown;
 
             if (self.applyLiveConfig()) {
-                log.debug("applied live config successfully", .{});
+                logger.debug("applied live config successfully", .{});
                 continue :state .process_manager_needs_to_check_for_new_command;
             } else |err| {
-                log.err("apply config failed: {}", .{err});
+                logger.err("apply config failed: {}", .{err});
                 fatal_error = err;
                 continue :state .process_manager_failed_to_apply_config;
             }
@@ -405,7 +405,7 @@ fn mainLoop(self: *ProcessManager) !void {
         .process_manager_needs_to_check_for_new_command => {
             if (self.stopping.load(.acquire)) continue :state .process_manager_needs_to_shutdown;
             if (self.checkForNewCommand(&local_command, &local_command_payload)) {
-                log.info("state=PM_NEEDS_TO_WAIT_FOR_COMMANDS ", .{});
+                logger.info("state=PM_NEEDS_TO_WAIT_FOR_COMMANDS ", .{});
                 continue :state .process_manager_needs_to_route_the_new_command;
             } else {
                 Thread.sleep(std.time.ns_per_ms);
@@ -414,7 +414,7 @@ fn mainLoop(self: *ProcessManager) !void {
         },
 
         .process_manager_needs_to_route_the_new_command => {
-            log.info("state=PM_NEEDS_TO_EXEC_COMMAND", .{});
+            logger.info("state=PM_NEEDS_TO_EXEC_COMMAND", .{});
             switch (local_command.cmd) {
                 .status => continue :state .process_manager_exec_status,
                 .start => continue :state .process_manager_exec_start,
@@ -440,14 +440,14 @@ fn mainLoop(self: *ProcessManager) !void {
             const name = local_command_payload[0..local_command.payload_len];
             if (self.live.get(name)) |proc| {
                 if (self.startProcess(proc)) |_| {
-                    log.info("started {s}", .{name});
+                    logger.info("started {s}", .{name});
                 } else |err| {
-                    log.err("failed to start {s}: {}", .{ name, err });
+                    logger.err("failed to start {s}: {}", .{ name, err });
                     fatal_error = err;
                     continue :state .process_manager_encountered_fatal_error;
                 }
             } else {
-                log.warn("no process named {s}", .{name});
+                logger.warn("no process named {s}", .{name});
             }
             continue :state .process_manager_needs_to_check_for_new_command;
         },
@@ -456,14 +456,14 @@ fn mainLoop(self: *ProcessManager) !void {
             const name = local_command_payload[0..local_command.payload_len];
             if (self.live.get(name)) |proc| {
                 if (self.stopProcess(proc)) |_| {
-                    log.info("stopped {s}", .{name});
+                    logger.info("stopped {s}", .{name});
                 } else |err| {
-                    log.err("failed to stop {s}: {}", .{ name, err });
+                    logger.err("failed to stop {s}: {}", .{ name, err });
                     fatal_error = err;
                     continue :state .process_manager_encountered_fatal_error;
                 }
             } else {
-                log.warn("no process named {s}", .{name});
+                logger.warn("no process named {s}", .{name});
             }
             continue :state .process_manager_needs_to_check_for_new_command;
         },
@@ -472,29 +472,29 @@ fn mainLoop(self: *ProcessManager) !void {
             const name = local_command_payload[0..local_command.payload_len];
             if (self.live.get(name)) |proc| {
                 if (self.restartProcess(proc)) |_| {
-                    log.info("restarted {s}", .{name});
+                    logger.info("restarted {s}", .{name});
                 } else |err| {
-                    log.err("failed to restart {s}: {}", .{ name, err });
+                    logger.err("failed to restart {s}: {}", .{ name, err });
                     fatal_error = err;
                     continue :state .process_manager_encountered_fatal_error;
                 }
             } else {
-                log.warn("no process named {s}", .{name});
+                logger.warn("no process named {s}", .{name});
             }
             continue :state .process_manager_needs_to_check_for_new_command;
         },
 
         .process_manager_exec_reload => {
-            log.info("reloading config…", .{});
+            logger.info("reloading config…", .{});
             continue :state .process_manager_reset_config_file_seek_position;
         },
 
         .process_manager_reset_config_file_seek_position => {
-            log.info("reloading content of config file", .{});
+            logger.info("reloading content of config file", .{});
             if (self.config.reload()) {
                 continue :state .process_manager_needs_to_load_a_config;
             } else |err| {
-                log.err("failed to reload config {}", .{err});
+                logger.err("failed to reload config {}", .{err});
                 fatal_error = err;
                 continue :state .process_manager_encountered_fatal_error;
             }
@@ -510,38 +510,38 @@ fn mainLoop(self: *ProcessManager) !void {
         },
 
         .process_manager_exec_quit => {
-            log.info("received quit", .{});
+            logger.info("received quit", .{});
             self.stopping.store(true, .release);
             continue :state .process_manager_needs_to_shutdown;
         },
 
         .process_manager_failed_to_load_config => {
-            log.err("failed to load config: {}", .{fatal_error});
+            logger.err("failed to load config: {}", .{fatal_error});
             continue :state .process_manager_encountered_fatal_error;
         },
 
         .process_manager_failed_to_stage_config => {
-            log.err("failed to stage config: {}", .{fatal_error});
+            logger.err("failed to stage config: {}", .{fatal_error});
             continue :state .process_manager_encountered_fatal_error;
         },
 
         .process_manager_failed_to_commit_config => {
-            log.err("failed to commit config: {}", .{fatal_error});
+            logger.err("failed to commit config: {}", .{fatal_error});
             continue :state .process_manager_encountered_fatal_error;
         },
 
         .process_manager_failed_to_apply_config => {
-            log.err("failed to apply config: {}", .{fatal_error});
+            logger.err("failed to apply config: {}", .{fatal_error});
             continue :state .process_manager_encountered_fatal_error;
         },
 
         .process_manager_encountered_fatal_error => {
-            log.err("fatal error in process manager: {}", .{fatal_error});
+            logger.err("fatal error in process manager: {}", .{fatal_error});
             return fatal_error;
         },
 
         .process_manager_needs_to_shutdown => {
-            log.info("process manager loop shutting down", .{});
+            logger.info("process manager loop shutting down", .{});
             return;
         },
     }
@@ -579,7 +579,7 @@ fn shutdown(self: *ProcessManager) !void {
 }
 
 fn printProcessStatus(self: *ProcessManager, proc: *Process) void {
-    _ = self;
+    const logger = self.logger;
     const status = proc.currentStatus();
     const status_symbol = switch (status) {
         .running => "●",
@@ -600,10 +600,10 @@ fn printProcessStatus(self: *ProcessManager, proc: *Process) void {
     const reset_color = "\x1b[0m";
 
     // Process name and command line
-    log.info("{s}{s}{s} {s} - {s}", .{ status_color, status_symbol, reset_color, proc.config.name, proc.config.conf.cmd });
+    logger.info("{s}{s}{s} {s} - {s}", .{ status_color, status_symbol, reset_color, proc.config.name, proc.config.conf.cmd });
 
     // Loaded line
-    log.info("     Loaded: loaded (command: {s}, numprocs: {d})", .{ proc.config.conf.cmd, proc.config.conf.numprocs });
+    logger.info("     Loaded: loaded (command: {s}, numprocs: {d})", .{ proc.config.conf.cmd, proc.config.conf.numprocs });
 
     // Active line with status details
     const status_str = switch (status) {
@@ -615,7 +615,7 @@ fn printProcessStatus(self: *ProcessManager, proc: *Process) void {
         else => "unknown",
     };
 
-    log.info("     Active: {s}{s}{s}", .{ status_color, status_str, reset_color });
+    logger.info("     Active: {s}{s}{s}", .{ status_color, status_str, reset_color });
 
     // Instance information
     var running_count: usize = 0;
@@ -629,11 +629,11 @@ fn printProcessStatus(self: *ProcessManager, proc: *Process) void {
     }
 
     if (main_pid) |pid| {
-        log.info("   Main PID: {d}", .{pid});
+        logger.info("   Main PID: {d}", .{pid});
     }
 
-    log.info("      Tasks: {d} (instances: {d} running/{d} total)", .{ running_count, running_count, proc.instances.len });
+    logger.info("      Tasks: {d} (instances: {d} running/{d} total)", .{ running_count, running_count, proc.instances.len });
 
     // Add blank line for readability
-    log.info("", .{});
+    logger.info("", .{});
 }
