@@ -9,6 +9,8 @@ const atomic = std.atomic;
 const ArrayList = std.ArrayListUnmanaged;
 const builtin = @import("builtin");
 
+var file_buffer: [std.heap.pageSize()]u8 = undefined;
+
 pub const Logger = struct {
     const Self = @This();
 
@@ -17,6 +19,7 @@ pub const Logger = struct {
     gpa: mem.Allocator,
     log_file: ?fs.File,
     log_file_path: []const u8,
+    log_file_writer: std.fs.File.Writer,
 
     pub const LogLevel = enum {
         default,
@@ -48,6 +51,7 @@ pub const Logger = struct {
             .mtx = Thread.Mutex{},
             .log_file = null,
             .log_file_path = log_file_path,
+            .log_file_writer = undefined,
         };
     }
 
@@ -62,18 +66,13 @@ pub const Logger = struct {
     pub fn start(self: *Logger) !void {
         if (fs.cwd().access(self.log_file_path, .{ .mode = .read_write })) {
             self.log_file = try fs.cwd().openFile(self.log_file_path, .{ .mode = .read_write });
-        } else |err| {
+        } else |e| {
+            std.debug.print("{}", .{e});
             const dirname = std.fs.path.dirname(self.log_file_path) orelse return error.InvalidPath;
             try fs.cwd().makePath(dirname);
             self.log_file = try fs.cwd().createFile(self.log_file_path, .{ .truncate = false });
-            
         }
-    }
-
-    pub fn mainLoop(self: *Logger) !void {
-        while (!self.stop.load(.acquire)) {
-            try Thread.yield();
-        }
+        self.log_file_writer = self.log_file.?.writer(&file_buffer);
     }
 
     fn timestamp(_: *const Logger) u64 {
@@ -83,9 +82,11 @@ pub const Logger = struct {
     fn logInternal(self: *Logger, comptime lvl: LogLevel, time: u64, comptime str: []const u8, args: anytype) void {
         self.mtx.lock();
         defer self.mtx.unlock();
-        if (builtin.mode == .Debug) {
-            std.debug.print("{f} | {f}" ++ str, .{ TimeParts.fromMsTimestamp(time), lvl } ++ args);
-        } else {}
+        std.debug.print("{f} | {f}" ++ str ++ "\n", .{ TimeParts.fromMsTimestamp(time), lvl } ++ args);
+        if (self.log_file) |_| {
+            const writer = &self.log_file_writer.interface;
+            writer.print("{f} | {f}" ++ str ++ "\n", .{ TimeParts.fromMsTimestamp(time), lvl } ++ args) catch {};
+        }
     }
 
     pub fn err(self: *Logger, comptime str: []const u8, args: anytype) void {

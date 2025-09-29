@@ -6,8 +6,9 @@ fingerprint: ?u64,
 instances: []Child,
 retries: usize = 0,
 backoff_until: ?u64 = null,
+logger: *Logger,
 
-pub fn init(self: *Process, gpa: mem.Allocator) void {
+pub fn init(self: *Process, gpa: mem.Allocator, logger: *Logger) void {
     self.* = .{
         .arena = heap.ArenaAllocator.init(gpa),
         .config = undefined,
@@ -15,12 +16,13 @@ pub fn init(self: *Process, gpa: mem.Allocator) void {
         .instances = &.{},
         .retries = 0,
         .backoff_until = null,
+        .logger = logger,
     };
 }
 
-pub fn create(gpa: mem.Allocator) !*Process {
+pub fn create(gpa: mem.Allocator, logger: *Logger) !*Process {
     const self = try gpa.create(Process);
-    self.init(gpa);
+    self.init(gpa, logger);
     return self;
 }
 
@@ -61,6 +63,7 @@ pub fn currentStatus(self: *Process) Status {
 }
 
 pub fn startAll(self: *Process) !void {
+    const logger = self.logger;
     const now = time.milliTimestamp();
     if (self.backoff_until) |until| {
         if (now < until) return error.BackoffActive;
@@ -74,17 +77,18 @@ pub fn startAll(self: *Process) !void {
         }
     }
 
-    log.info("process {s}: started all children", .{self.config.name});
-    // Remove process-level retry tracking - rely on child-level retry logic
+    logger.info("process {s}: started all children", .{self.config.name});
 }
 
 pub fn stopAll(self: *Process) !void {
+    const logger = self.logger;
     for (self.instances) |*inst| {
         if (inst.pid != null) {
             try inst.stop(@intFromEnum(self.config.conf.stopsignal), self.config.conf.stoptime * 1000);
         }
     }
-    log.info("process {s}: stopped all children", .{self.config.name});
+
+    logger.info("process {s}: stopped all children", .{self.config.name});
 }
 
 pub fn restartAll(self: *Process) !void {
@@ -232,7 +236,7 @@ pub fn configure(self: *Process, process_name: []const u8, process_config: *RawP
 
     self.instances = try arena.alloc(Child, numprocs);
     for (self.instances) |*inst| {
-        inst.* = Child.init();
+        inst.* = Child.init(self.logger);
     }
 }
 
@@ -409,3 +413,4 @@ const ParsedConfig = common.Config;
 const RawProcess = common.RawProcess;
 const RawProcessConfig = common.RawProcessConfig;
 const Child = @import("Child.zig").Child;
+const Logger = common.Logger;
