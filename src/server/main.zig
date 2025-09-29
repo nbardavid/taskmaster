@@ -49,6 +49,10 @@ pub fn main() !void {
     var logger = Logger.init(gpa, log_file_path);
     defer logger.deinit();
 
+    logger.start() catch |err| {
+        return err;
+    };
+
     var server = Server.init(gpa, &logger);
     server.start(socket_file_path, config_file_path) catch |err| {
         logger.err("Fatal error encountered {}", .{err});
