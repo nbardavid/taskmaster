@@ -8,6 +8,19 @@ const Logger = common.Logger;
 
 pub const Child = @This();
 
+fn ensureDirectoryExists(path: []const u8) !void {
+    fs.cwd().makePath(path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+}
+
+fn ensureParentDirectoryExists(file_path: []const u8) !void {
+    if (std.fs.path.dirname(file_path)) |dirname| {
+        try ensureDirectoryExists(dirname);
+    }
+}
+
 const Status = enum {
     stopped,
     starting,
@@ -46,33 +59,37 @@ pub fn start(
         }
     }
 
-    logger.info("[child.start] cmd={s}\n", .{cfg.conf.cmd});
+    logger.info("[child.start] cmd={s}", .{cfg.conf.cmd});
     for (cfg.conf.env) |e| {
-        logger.info("[child.start] env={s}\n", .{e});
+        logger.info("[child.start] env={s}", .{e});
     }
 
     const argv = try buildArgv(cfg.conf.cmd, arena);
     const envp = try buildEnvp(cfg.conf.env, arena);
 
-    logger.info("[child.start] argv[0]={s}\n", .{argv.ptr[0].?});
+    logger.info("[child.start] argv[0]={s}", .{argv.ptr[0].?});
 
     const pid = try posix.fork();
     if (pid == 0) {
-        logger.info("[child.start] in child, about to setup wd/umask/logs\n", .{});
-        if (cfg.conf.workingdir.len > 0) {
-            logger.info("[child.start] workingdir={s}\n", .{cfg.conf.workingdir});
-        }
+        try posix.setpgid(0, 0);
+
+        const empty_sigset = posix.sigemptyset();
+        var default_action = posix.Sigaction{
+            .handler = .{ .handler = posix.SIG.DFL },
+            .mask = empty_sigset,
+            .flags = 0,
+        };
+        _ = posix.sigaction(posix.SIG.HUP, &default_action, null);
+        _ = posix.sigaction(posix.SIG.TERM, &default_action, null);
+        _ = posix.sigaction(posix.SIG.INT, &default_action, null);
+
         try setupWorkingDir(cfg.conf.workingdir);
-        logger.info("[child.start] umask={d}\n", .{cfg.conf.umask});
         try setupUmask(cfg.conf.umask);
         try redirectLogs(cfg);
 
-        logger.info("[child.start] execveZ path={s}\n", .{argv.ptr[0].?});
-        const e = posix.execveZ(argv.ptr[0].?, argv.ptr, envp.ptr);
-        {
-            logger.info("execve failed: {any}\n", .{e});
-            std.posix.exit(127);
-        }
+        const err = posix.execveZ(argv.ptr[0].?, argv.ptr, envp.ptr);
+        logger.err("fatal error {}", .{err});
+        std.posix.exit(127);
     }
 
     self.pid = pid;
@@ -109,6 +126,9 @@ fn buildEnvp(env: []const []const u8, arena: std.mem.Allocator) ![:null]?[*:0]u8
 
 fn setupWorkingDir(path: []const u8) !void {
     if (path.len == 0) return;
+
+    try ensureDirectoryExists(path);
+
     var buf: [std.fs.max_path_bytes:0]u8 = undefined;
     @memset(buf[0..], 0x00);
     @memcpy(buf[0..path.len :0], path);
@@ -120,15 +140,16 @@ fn setupUmask(mask: usize) !void {
 }
 
 fn redirectLogs(cfg: *const Process.Config) !void {
-    if (cfg.conf.stdout.len > 0) {
+    if (cfg.conf.stdout.len > 0 and !std.mem.eql(u8, cfg.conf.stdout, "/dev/null")) {
+        try ensureParentDirectoryExists(cfg.conf.stdout);
         const file = try std.fs.cwd().createFile(cfg.conf.stdout, .{ .truncate = false });
         const fd = file.handle;
         try std.posix.dup2(fd, std.posix.STDOUT_FILENO);
         file.close();
     }
 
-    if (cfg.conf.stderr.len > 0) {
-        std.debug.print("[redirectLogs] stderr path={s}\n", .{cfg.conf.stderr});
+    if (cfg.conf.stderr.len > 0 and !std.mem.eql(u8, cfg.conf.stderr, "/dev/null")) {
+        try ensureParentDirectoryExists(cfg.conf.stderr);
         const file = try std.fs.cwd().createFile(cfg.conf.stderr, .{ .truncate = false });
         const fd = file.handle;
         try std.posix.dup2(fd, std.posix.STDERR_FILENO);
@@ -140,8 +161,7 @@ pub fn stop(self: *Child, sig: i32, timeout_ms: usize) !void {
     if (self.pid) |pid| {
         self.status = .stopping;
 
-        // Send the initial signal
-        _ = posix.kill(pid, @intCast(sig)) catch |err| switch (err) {
+        _ = posix.kill(-pid, @intCast(sig)) catch |err| switch (err) {
             error.PermissionDenied, error.ProcessNotFound, error.Unexpected => {
                 self.finalizeExit(null, null);
                 return;
@@ -149,10 +169,8 @@ pub fn stop(self: *Child, sig: i32, timeout_ms: usize) !void {
             else => return err,
         };
 
-        // Wait for graceful exit with timeout
         const t0 = time.milliTimestamp();
         while (true) {
-            // Try the original pattern first
             const res = posix.waitpid(pid, posix.W.NOHANG);
             if (res.pid != 0) {
                 const exit = decodeWaitStatus(res.status);
@@ -163,17 +181,14 @@ pub fn stop(self: *Child, sig: i32, timeout_ms: usize) !void {
             std.Thread.sleep(50 * time.ns_per_ms);
         }
 
-        // Send SIGKILL if graceful shutdown failed
-        _ = posix.kill(pid, posix.SIG.KILL) catch |err| switch (err) {
+        _ = posix.kill(-pid, posix.SIG.KILL) catch |err| switch (err) {
             error.PermissionDenied, error.ProcessNotFound, error.Unexpected => {
-                // Process likely already exited
                 self.finalizeExit(null, null);
                 return;
             },
             else => return err,
         };
 
-        // Wait for forced exit with shorter timeout
         const kill_deadline = time.milliTimestamp() + 1500;
         while (true) {
             const res2 = posix.waitpid(pid, posix.W.NOHANG);
@@ -187,24 +202,23 @@ pub fn stop(self: *Child, sig: i32, timeout_ms: usize) !void {
         }
     }
 
-    // If we get here, the process is unresponsive - mark it as exited anyway
     self.finalizeExit(null, null);
 }
 
 pub fn kill(self: *Child) void {
     if (self.pid) |pid| {
-        _ = posix.kill(pid, posix.SIG.KILL) catch {};
+        _ = posix.kill(-pid, posix.SIG.KILL) catch {};
     }
     self.finalizeExit(null, null);
 }
 
 pub fn poll(self: *Child) !?void {
     if (self.pid) |pid| {
-        // Note: waitpid returns WaitPidResult struct, not error union in this Zig version
         const res = posix.waitpid(pid, posix.W.NOHANG);
         if (res.pid != 0) {
             const exit = decodeWaitStatus(res.status);
             self.finalizeExit(exit.code, exit.signal);
+            self.logger.info("process pid={d} exited with code={?d} signal={?d}", .{ pid, exit.code, exit.signal });
             return {};
         }
     }
@@ -215,10 +229,9 @@ pub fn restart(self: *Child, cfg: *const Process.Config, arena: std.mem.Allocato
     const now = time.milliTimestamp();
     self.retries += 1;
 
-    // Use configuration values instead of hardcoded ones
     if (self.retries >= cfg.conf.startretries and (@as(u64, @intCast(now)) - self.last_start_time) < (cfg.conf.starttime * 1000)) {
         self.status = .backoff;
-        // Backoff time: 2x the configured start time, minimum 5 seconds
+
         const backoff_time = @max(cfg.conf.starttime * 2 * 1000, 5000);
         self.backoff_until = @as(u64, @intCast(now)) + backoff_time;
         return;
@@ -228,7 +241,7 @@ pub fn restart(self: *Child, cfg: *const Process.Config, arena: std.mem.Allocato
     try self.start(cfg, arena);
 }
 
-fn finalizeExit(self: *Child, exit_code: ?u32, exit_signal: ?u32) void {
+pub fn finalizeExit(self: *Child, exit_code: ?u32, exit_signal: ?u32) void {
     self.pid = null;
     self.exit_code = exit_code;
     self.exit_signal = exit_signal;

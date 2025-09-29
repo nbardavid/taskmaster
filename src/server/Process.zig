@@ -34,21 +34,39 @@ pub fn destroy(self: *Process, gpa: mem.Allocator) void {
 pub fn currentStatus(self: *Process) Status {
     var all_stopped = true;
     var all_exited = true;
+    var has_starting = false;
+    var has_stopping = false;
 
     for (self.instances) |*inst| {
         switch (inst.status) {
             .fatal => return .fatal,
             .running => return .running,
             .backoff => return .backoff,
-            .stopped => {},
-            .exited => {},
-            else => {
+            .starting => {
+                has_starting = true;
                 all_stopped = false;
                 all_exited = false;
             },
+            .stopping => {
+                has_stopping = true;
+                all_stopped = false;
+                all_exited = false;
+            },
+            .stopped => {
+                all_exited = false;
+            },
+            .exited => {
+                all_stopped = false;
+            },
         }
-        if (inst.status != .stopped) all_stopped = false;
-        if (inst.status != .exited) all_exited = false;
+    }
+
+    if (has_starting) {
+        return .starting;
+    }
+
+    if (has_stopping) {
+        return .stopping;
     }
 
     if (all_stopped) {
@@ -71,7 +89,6 @@ pub fn startAll(self: *Process) !void {
 
     const arena = self.arena.allocator();
     for (self.instances) |*inst| {
-        // Only start instances that are stopped or in fatal state
         if (inst.status == .stopped or inst.status == .fatal) {
             try inst.start(&self.config, arena);
         }
@@ -94,10 +111,8 @@ pub fn stopAll(self: *Process) !void {
 pub fn restartAll(self: *Process) !void {
     try self.stopAll();
     try self.startAll();
-    log.info("process {s}: restarted all children", .{self.config.name});
+    self.logger.info("process {s}: restarted all children", .{self.config.name});
 }
-
-// Process-level backoff removed - handled at child level now
 
 pub fn resetRetriesIfStable(self: *Process) void {
     const now = time.milliTimestamp();

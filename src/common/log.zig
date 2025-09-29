@@ -67,8 +67,7 @@ pub const Logger = struct {
         if (fs.cwd().access(self.log_file_path, .{ .mode = .read_write })) {
             self.log_file = try fs.cwd().openFile(self.log_file_path, .{ .mode = .read_write });
         } else |e| {
-            std.debug.print("{}", .{e});
-            const dirname = std.fs.path.dirname(self.log_file_path) orelse return error.InvalidPath;
+            const dirname = std.fs.path.dirname(self.log_file_path) orelse return e;
             try fs.cwd().makePath(dirname);
             self.log_file = try fs.cwd().createFile(self.log_file_path, .{ .truncate = false });
         }
@@ -76,16 +75,16 @@ pub const Logger = struct {
     }
 
     fn timestamp(_: *const Logger) u64 {
-        return @as(u64, @intCast(std.time.timestamp()));
+        return @as(u64, @intCast(std.time.timestamp())) * 1000;
     }
 
     fn logInternal(self: *Logger, comptime lvl: LogLevel, time: u64, comptime str: []const u8, args: anytype) void {
         self.mtx.lock();
         defer self.mtx.unlock();
-        std.debug.print("{f} | {f}" ++ str ++ "\n", .{ TimeParts.fromMsTimestamp(time), lvl } ++ args);
         if (self.log_file) |_| {
             const writer = &self.log_file_writer.interface;
             writer.print("{f} | {f}" ++ str ++ "\n", .{ TimeParts.fromMsTimestamp(time), lvl } ++ args) catch {};
+            std.debug.print("{f} | {f}" ++ str ++ "\n", .{ TimeParts.fromMsTimestamp(time), lvl } ++ args);
         }
     }
 

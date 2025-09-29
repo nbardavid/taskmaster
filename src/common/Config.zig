@@ -26,7 +26,9 @@ pub fn parseLeaky(self: *Config, gpa: mem.Allocator) !ParsedResult {
 
     const file_content = try reader.allocRemaining(arena_instance.allocator(), .unlimited);
     file_content_hasher.update(file_content);
-    const parsed = try json.parseFromSliceLeaky(Programs, arena_instance.allocator(), file_content, .{});
+    const parsed = try json.parseFromSliceLeaky(Programs, arena_instance.allocator(), file_content, .{
+        .ignore_unknown_fields = true,
+    });
     return ParsedResult.init(
         arena_instance,
         parsed,
@@ -89,7 +91,7 @@ pub const RawProcessConfig = struct {
     stoptime: ?usize = null,
     stopsignal: ?[]const u8 = null,
     workingdir: ?[]const u8 = null,
-    env: ?json.ArrayHashMap([]const u8),
+    env: ?json.ArrayHashMap([]const u8) = null,
     umask: ?[]const u8 = null,
 };
 

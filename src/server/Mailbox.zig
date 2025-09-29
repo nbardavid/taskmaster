@@ -123,7 +123,7 @@ fn mainLoop(self: *Mailbox) !void {
         .mailbox_wait_for_client_to_connect => {
             const stop = self.stopping.load(.acquire);
             const srv_null = self.server == null;
-            logger.debug("state=MAILBOX_WAIT_FOR_CLIENT stop={} srv_null={}", .{ stop, srv_null });
+            // logger.debug("state=MAILBOX_WAIT_FOR_CLIENT stop={} srv_null={}", .{ stop, srv_null });
 
             if (stop or srv_null) {
                 if (stop) logger.warn("WAIT -> SHUTDOWN (stopping=true)", .{});
@@ -139,7 +139,7 @@ fn mainLoop(self: *Mailbox) !void {
                 fatal_error = err;
                 continue :state .mailbox_encountered_fatal_error;
             };
-            logger.debug("poll(server_fd={d}) -> rc={} revents=0x{x}", .{ fd, rc, fds[0].revents });
+            // logger.debug("poll(server_fd={d}) -> rc={} revents=0x{x}", .{ fd, rc, fds[0].revents });
 
             if (rc == 0) {
                 continue :state .mailbox_wait_for_client_to_connect;
@@ -178,9 +178,9 @@ fn mainLoop(self: *Mailbox) !void {
         },
 
         .mailbox_needs_to_peek_client_command => {
-            logger.debug("state=MAILBOX_PEEK_CLIENT_COMMAND stop={} cli_fd={}", .{
-                self.stopping.load(.acquire), self.client.?.stream.handle,
-            });
+            // // logger.debug("state=MAILBOX_PEEK_CLIENT_COMMAND stop={} cli_fd={}", .{
+            //     self.stopping.load(.acquire), self.client.?.stream.handle,
+            // });
             if (self.stopping.load(.acquire)) continue :state .mailbox_needs_to_shutdown;
 
             var fds = [_]posix.pollfd{
@@ -251,7 +251,7 @@ fn mainLoop(self: *Mailbox) !void {
         },
 
         .mailbox_needs_to_send_a_notification => {
-            logger.debug("state=MAILBOX_SEND_NOTIFICATION", .{});
+            // logger.debug("state=MAILBOX_SEND_NOTIFICATION", .{});
             self.bell.store(true, .release);
             logger.info("bell triggered due to client command", .{});
             continue :state .mailbox_needs_to_peek_client_command;

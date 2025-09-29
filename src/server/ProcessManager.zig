@@ -206,8 +206,13 @@ fn stopProcess(self: *ProcessManager, proc: *Process) !void {
 fn startProcess(self: *ProcessManager, proc: *Process) !void {
     const arena = proc.arena.allocator();
     for (proc.instances, 0..) |*inst, i| {
-        try inst.start(&proc.config, arena);
-        try self.updateLivePid(inst, proc, i);
+        if (inst.status == .stopped or inst.status == .exited or inst.status == .fatal) {
+            self.logger.info("starting process {s}[{d}] (current status: {s})", .{ proc.config.name, i, @tagName(inst.status) });
+            try inst.start(&proc.config, arena);
+            try self.updateLivePid(inst, proc, i);
+        } else {
+            self.logger.debug("skipping start of process {s}[{d}] - already in status: {s}", .{ proc.config.name, i, @tagName(inst.status) });
+        }
     }
 }
 
@@ -218,13 +223,19 @@ fn restartProcess(self: *ProcessManager, proc: *Process) !void {
 
 fn updateLivePid(self: *ProcessManager, child: *const Child, proc: *Process, index: usize) !void {
     if (child.pid) |pid| {
-        // Add or update PID tracking
         try self.live_pid.put(self.gpa, pid, .{ .parent = proc, .index = index });
+        self.logger.debug("updated live PID tracking: pid={d} for process {s}[{d}]", .{ pid, proc.config.name, index });
+    } else {
+        self.logger.warn("attempted to update live PID tracking but child has no PID for process {s}[{d}]", .{ proc.config.name, index });
     }
 }
 
 fn removeLivePid(self: *ProcessManager, pid: posix.pid_t) void {
-    _ = self.live_pid.swapRemove(pid);
+    if (self.live_pid.swapRemove(pid)) {
+        self.logger.debug("removed PID {d} from live tracking", .{pid});
+    } else {
+        self.logger.warn("attempted to remove PID {d} but it was not being tracked", .{pid});
+    }
 }
 
 fn manageProcess(self: *ProcessManager, proc: *Process) !void {
@@ -232,22 +243,55 @@ fn manageProcess(self: *ProcessManager, proc: *Process) !void {
 
     for (proc.instances, 0..) |*child, i| {
         if (child.pid) |pid| {
-            if (try child.poll()) |_| {
+            if (child.poll()) |result| {
+                if (result != null) {
+                    self.removeLivePid(pid);
+                    self.logger.info("detected exit of process {s}[{d}] pid={d}", .{ proc.config.name, i, pid });
+                }
+            } else |err| {
+                self.logger.err("failed to poll process {s}[{d}] pid={d}: {}", .{ proc.config.name, i, pid, err });
+
+                child.finalizeExit(null, null);
                 self.removeLivePid(pid);
             }
+        } else if (child.status == .running) {
+            self.logger.warn("process {s}[{d}] has status=running but no PID, marking as exited", .{ proc.config.name, i });
+            child.status = .exited;
         }
 
         switch (child.status) {
             .starting => {
                 if ((now - child.last_start_time) >= (proc.config.conf.starttime * 1000)) {
-                    child.status = .running;
+                    if (child.pid) |pid| {
+                        // Check if process already exited during startup (status changed by polling)
+                        if (child.status != .starting) {
+                            // Status was changed by polling - likely .exited, skip transition
+                            continue;
+                        }
+
+                        if (posix.kill(pid, 0)) |_| {
+                            child.status = .running;
+                            try self.updateLivePid(child, proc, i);
+                            self.logger.info("process {s}[{d}] marked as successfully started", .{ proc.config.name, i });
+                        } else |err| switch (err) {
+                            error.ProcessNotFound => {
+                                child.status = .exited;
+                                self.removeLivePid(pid);
+                                self.logger.warn("process {s}[{d}] died during startup period", .{ proc.config.name, i });
+                            },
+                            else => {
+                                self.logger.debug("could not verify process {s}[{d}] status: {}", .{ proc.config.name, i, err });
+                            },
+                        }
+                    } else {
+                        child.status = .fatal;
+                        self.logger.err("process {s}[{d}] has no PID after startup period", .{ proc.config.name, i });
+                    }
                 }
             },
             .backoff => {
-                // Handle backoff expiration
                 if (child.backoff_until) |until| {
                     if (now >= until) {
-                        // Backoff expired, decide next action based on restart policy
                         const should_restart = switch (proc.config.conf.autorestart) {
                             .always => true,
                             .unexpected => if (child.exit_code) |code| !proc.isExpectedExitCode(code) else true,
@@ -255,12 +299,10 @@ fn manageProcess(self: *ProcessManager, proc: *Process) !void {
                         };
 
                         if (should_restart and child.retries < proc.config.conf.startretries) {
-                            // Try restarting again
                             child.backoff_until = null;
                             try child.restart(&proc.config, proc.arena.allocator());
                             try self.updateLivePid(child, proc, i);
                         } else {
-                            // No more restarts, mark as stopped or fatal
                             child.status = if (should_restart) .fatal else .stopped;
                             child.backoff_until = null;
                         }
@@ -275,7 +317,6 @@ fn manageProcess(self: *ProcessManager, proc: *Process) !void {
                 };
 
                 if (should_restart and child.retries < proc.config.conf.startretries) {
-                    // Use consistent restart logic through child.restart()
                     try child.restart(&proc.config, proc.arena.allocator());
                     try self.updateLivePid(child, proc, i);
                 } else if (!should_restart) {
@@ -284,27 +325,15 @@ fn manageProcess(self: *ProcessManager, proc: *Process) !void {
                     child.status = .fatal;
                 }
             },
-            .running => {
-                // Running state is stable, nothing to do here
-                // Transitions out of .running are handled by polling (-> .exited)
-                // or by external commands (-> .stopping)
-            },
-            .stopping => {
-                // Stopping state should transition to .exited when process actually exits
-                // This is handled by polling above, but we can add a timeout check
-                // if the process doesn't respond to signals within reasonable time
-            },
-            .stopped => {
-                // Stopped is a terminal state unless manually restarted
-            },
-            .fatal => {
-                // Fatal is a terminal state
-            },
+            .running => {},
+            .stopping => {},
+            .stopped => {},
+            .fatal => {},
         }
     }
 }
 
-fn applyLiveConfig(self: *ProcessManager) !void {
+fn monitorProcesses(self: *ProcessManager) !void {
     var it = self.live.iterator();
     while (it.next()) |entry| {
         try self.manageProcess(entry.value_ptr.*);
@@ -389,16 +418,25 @@ fn mainLoop(self: *ProcessManager) !void {
         },
 
         .process_manager_needs_to_apply_the_new_config => {
-            logger.debug("state=APPLY_NEW_CONFIG", .{});
             if (self.stopping.load(.acquire)) continue :state .process_manager_needs_to_shutdown;
 
-            if (self.applyLiveConfig()) {
-                logger.debug("applied live config successfully", .{});
-                continue :state .process_manager_needs_to_check_for_new_command;
+            if (self.monitorProcesses()) {
+                continue :state .process_manager_needs_to_monitor_processes;
             } else |err| {
                 logger.err("apply config failed: {}", .{err});
                 fatal_error = err;
                 continue :state .process_manager_failed_to_apply_config;
+            }
+        },
+
+        .process_manager_needs_to_monitor_processes => {
+            if (self.stopping.load(.acquire)) continue :state .process_manager_needs_to_shutdown;
+
+            if (self.monitorProcesses()) {
+                continue :state .process_manager_needs_to_check_for_new_command;
+            } else |err| {
+                fatal_error = err;
+                continue :state .process_manager_encountered_fatal_error;
             }
         },
 
@@ -409,7 +447,8 @@ fn mainLoop(self: *ProcessManager) !void {
                 continue :state .process_manager_needs_to_route_the_new_command;
             } else {
                 Thread.sleep(std.time.ns_per_ms);
-                continue :state .process_manager_needs_to_check_for_new_command;
+                // Go back to monitoring to manage running processes
+                continue :state .process_manager_needs_to_monitor_processes;
             }
         },
 
@@ -565,6 +604,7 @@ const Status = enum {
     process_manager_needs_to_commit_the_new_config,
     process_manager_needs_to_load_a_config,
     process_manager_needs_to_load_the_inial_config,
+    process_manager_needs_to_monitor_processes,
     process_manager_needs_to_route_the_new_command,
     process_manager_needs_to_shutdown,
     process_manager_needs_to_stage_the_new_config,
@@ -586,45 +626,58 @@ fn printProcessStatus(self: *ProcessManager, proc: *Process) void {
         .stopped, .exited => "○",
         .fatal => "✗",
         .backoff => "◐",
+        .starting => "◐",
+        .stopping => "◯",
         else => "◯",
     };
 
     const status_color = switch (status) {
-        .running => "\x1b[32m", // green
-        .stopped, .exited => "\x1b[37m", // white
-        .fatal => "\x1b[31m", // red
-        .backoff => "\x1b[33m", // yellow
-        else => "\x1b[37m", // white
+        .running => "\x1b[32m",
+        .stopped, .exited => "\x1b[37m",
+        .fatal => "\x1b[31m",
+        .backoff, .starting => "\x1b[33m",
+        .stopping => "\x1b[35m",
+        else => "\x1b[37m",
     };
 
     const reset_color = "\x1b[0m";
 
-    // Process name and command line
     logger.info("{s}{s}{s} {s} - {s}", .{ status_color, status_symbol, reset_color, proc.config.name, proc.config.conf.cmd });
 
-    // Loaded line
     logger.info("     Loaded: loaded (command: {s}, numprocs: {d})", .{ proc.config.conf.cmd, proc.config.conf.numprocs });
 
-    // Active line with status details
     const status_str = switch (status) {
         .running => "active (running)",
         .stopped => "inactive (dead)",
         .exited => "inactive (exited)",
         .fatal => "failed (fatal)",
         .backoff => "activating (backoff)",
+        .starting => "activating (starting)",
+        .stopping => "deactivating (stopping)",
         else => "unknown",
     };
 
     logger.info("     Active: {s}{s}{s}", .{ status_color, status_str, reset_color });
 
-    // Instance information
     var running_count: usize = 0;
+    var starting_count: usize = 0;
+    var stopping_count: usize = 0;
+    var backoff_count: usize = 0;
+    var fatal_count: usize = 0;
     var main_pid: ?std.posix.pid_t = null;
 
-    for (proc.instances) |*inst| {
-        if (inst.status == .running) {
-            running_count += 1;
-            if (main_pid == null) main_pid = inst.pid;
+    for (proc.instances, 0..) |*inst, i| {
+        logger.debug("  Instance[{d}]: status={s}, pid={?d}", .{ i, @tagName(inst.status), inst.pid });
+        switch (inst.status) {
+            .running => {
+                running_count += 1;
+                if (main_pid == null) main_pid = inst.pid;
+            },
+            .starting => starting_count += 1,
+            .stopping => stopping_count += 1,
+            .backoff => backoff_count += 1,
+            .fatal => fatal_count += 1,
+            else => {},
         }
     }
 
@@ -632,8 +685,7 @@ fn printProcessStatus(self: *ProcessManager, proc: *Process) void {
         logger.info("   Main PID: {d}", .{pid});
     }
 
-    logger.info("      Tasks: {d} (instances: {d} running/{d} total)", .{ running_count, running_count, proc.instances.len });
+    logger.info("      Tasks: {d} running, {d} starting, {d} stopping, {d} backoff, {d} fatal (total: {d})", .{ running_count, starting_count, stopping_count, backoff_count, fatal_count, proc.instances.len });
 
-    // Add blank line for readability
     logger.info("", .{});
 }

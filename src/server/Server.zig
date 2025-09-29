@@ -3,12 +3,14 @@ const Server = @This();
 gpa: mem.Allocator,
 bell: std.atomic.Value(bool),
 logger: *Logger = undefined,
+signal_handler: SignalHandler,
 
 pub fn init(gpa: mem.Allocator, logger: *Logger) Server {
     return .{
         .gpa = gpa,
         .bell = .{ .raw = false },
         .logger = logger,
+        .signal_handler = SignalHandler.init(logger),
     };
 }
 
@@ -40,10 +42,73 @@ pub fn start(self: *Server, unix_sock_path: []const u8, config_file_path: []cons
     var mailbox: Mailbox = .init(unix_sock_path, &self.bell, logger);
     defer mailbox.deinit();
 
+    // Setup signal handling
+    SignalHandler.setGlobalHandler(&self.signal_handler);
+    defer SignalHandler.clearGlobalHandler();
+    defer self.signal_handler.deinit();
+
     var cmd: Command = undefined;
     var cmd_payload: [256]u8 = undefined;
 
-    state: switch (State.server_needs_to_init_process_manager) {
+    state: switch (State.server_needs_to_setup_signals) {
+        .server_needs_to_setup_signals => {
+            logger.info("state=SERVER_SETUP_SIGNALS", .{});
+            if (self.signal_handler.setup()) {
+                logger.info("signal handlers setup successfully", .{});
+                continue :state .server_needs_to_check_signals;
+            } else |err| {
+                logger.err("failed to setup signal handlers: {}", .{err});
+                fatal_error = err;
+                continue :state .server_encountered_fatal_error;
+            }
+        },
+
+        .server_needs_to_check_signals => {
+            // Always check for signals first, before any other operations
+            const signals = self.signal_handler.checkSignals();
+            if (signals.hasAnySignal()) {
+                // Debug: log what signals were detected
+                logger.debug("signals detected - sighup={} sigterm={} sigint={} sigchld={}", .{signals.sighup, signals.sigterm, signals.sigint, signals.sigchld});
+
+                // Handle signals immediately here instead of in a separate state
+                if (signals.sighup) {
+                    logger.info("received SIGHUP - reloading configuration", .{});
+                    cmd = Command{ .cmd = .reload, .payload_len = 0 };
+                    sendCommand(&process_manager, cmd, &cmd_payload);
+                }
+
+                if (signals.sigterm or signals.sigint or signals.sigquit) {
+                    const sig_name = if (signals.sigterm) "SIGTERM" else if (signals.sigint) "SIGINT" else "SIGQUIT";
+                    logger.info("received {s} - initiating graceful shutdown", .{sig_name});
+                    continue :state .server_needs_to_stop;
+                }
+
+                if (signals.sigchld) {
+                    logger.debug("received SIGCHLD - child process state changed", .{});
+                    // ProcessManager will handle child process reaping in its monitor loop
+                }
+
+                if (signals.sigusr1) {
+                    logger.info("received SIGUSR1 - dumping process status", .{});
+                    cmd = Command{ .cmd = .dump, .payload_len = 0 };
+                    sendCommand(&process_manager, cmd, &cmd_payload);
+                }
+
+                if (signals.sigusr2) {
+                    logger.info("received SIGUSR2 - logging status information", .{});
+                    cmd = Command{ .cmd = .status, .payload_len = 0 };
+                    sendCommand(&process_manager, cmd, &cmd_payload);
+                }
+            }
+
+            // If no signals, continue with normal operation - determine next state based on initialization
+            if (process_manager.thread == null) {
+                continue :state .server_needs_to_init_process_manager;
+            } else {
+                continue :state .server_needs_to_wait_for_command;
+            }
+        },
+
         .server_needs_to_init_process_manager => {
             logger.info("state=SERVER_INIT_PROCESS_MANAGER", .{});
             if (process_manager.start()) {
@@ -60,7 +125,7 @@ pub fn start(self: *Server, unix_sock_path: []const u8, config_file_path: []cons
             logger.info("state=SERVER_INIT_MAILBOX", .{});
             if (mailbox.start()) {
                 logger.info("mailbox started successfully", .{});
-                continue :state .server_needs_to_wait_for_command;
+                continue :state .server_needs_to_check_signals;
             } else |err| {
                 logger.err("failed to start mailbox: {}", .{err});
                 fatal_error = err;
@@ -74,7 +139,7 @@ pub fn start(self: *Server, unix_sock_path: []const u8, config_file_path: []cons
                 continue :state .server_needs_to_post_new_command;
             } else {
                 Thread.sleep(std.time.ns_per_ms);
-                continue :state .server_needs_to_wait_for_command;
+                continue :state .server_needs_to_check_signals;
             }
         },
 
@@ -94,8 +159,9 @@ pub fn start(self: *Server, unix_sock_path: []const u8, config_file_path: []cons
 
         .server_needs_to_send_command => {
             sendCommand(&process_manager, cmd, &cmd_payload);
-            continue :state .server_needs_to_wait_for_command;
+            continue :state .server_needs_to_check_signals;
         },
+
 
         .server_needs_to_stop => {
             logger.info("state=SERVER_STOP", .{});
@@ -126,6 +192,8 @@ pub fn start(self: *Server, unix_sock_path: []const u8, config_file_path: []cons
 }
 
 const State = enum {
+    server_needs_to_setup_signals,
+    server_needs_to_check_signals,
     server_needs_to_wait_for_command,
     server_needs_to_post_new_command,
     server_needs_to_send_command,
@@ -158,3 +226,4 @@ const Command = common.Command;
 const Program = common.Program;
 const ProcessManager = @import("ProcessManager.zig");
 const Mailbox = @import("Mailbox.zig");
+const SignalHandler = @import("SignalHandler.zig");
