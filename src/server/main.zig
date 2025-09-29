@@ -44,7 +44,7 @@ pub fn main() !void {
 
     const config_file_path = if (argv.len == 2) argv[1][0..] else "config.json";
     const socket_file_path = if (argv.len == 3) argv[2][0..] else "/tmp/taskmaster.server.sock";
-    const log_file_path = "taskmaster.log";
+    const log_file_path = "./taskmaster.log";
 
     var logger = Logger.init(gpa, log_file_path);
     defer logger.deinit();
