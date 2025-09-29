@@ -13,6 +13,7 @@ const Config = common.Config;
 
 const Process = @import("Process.zig");
 const ExitCode = Process.ExitCode;
+const Child = @import("Child.zig");
 
 pub const ProcessManager = @This();
 
@@ -195,7 +196,7 @@ fn stopProcess(self: *ProcessManager, proc: *Process) !void {
     for (proc.instances) |*inst| {
         if (inst.pid) |pid| {
             try inst.stop(@intFromEnum(proc.config.conf.stopsignal), proc.config.conf.stoptime * 1000);
-            _ = self.live_pid.swapRemove(pid);
+            self.removeLivePid(pid);
         }
     }
 }
@@ -204,9 +205,7 @@ fn startProcess(self: *ProcessManager, proc: *Process) !void {
     const arena = proc.arena.allocator();
     for (proc.instances, 0..) |*inst, i| {
         try inst.start(&proc.config, arena);
-        if (inst.pid) |pid| {
-            try self.live_pid.put(self.gpa, pid, .{ .parent = proc, .index = i });
-        }
+        try self.updateLivePid(inst, proc, i);
     }
 }
 
@@ -215,14 +214,58 @@ fn restartProcess(self: *ProcessManager, proc: *Process) !void {
     try self.startProcess(proc);
 }
 
+fn updateLivePid(self: *ProcessManager, child: *const Child, proc: *Process, index: usize) !void {
+    if (child.pid) |pid| {
+        // Add or update PID tracking
+        try self.live_pid.put(self.gpa, pid, .{ .parent = proc, .index = index });
+    }
+}
+
+fn removeLivePid(self: *ProcessManager, pid: posix.pid_t) void {
+    _ = self.live_pid.swapRemove(pid);
+}
+
 fn manageProcess(self: *ProcessManager, proc: *Process) !void {
     const now: u64 = @intCast(std.time.milliTimestamp());
 
     for (proc.instances, 0..) |*child, i| {
+        // Always poll for child process status changes first
+        if (child.pid) |pid| {
+            if (try child.poll()) |_| {
+                // Child process has exited, remove from live_pid tracking
+                self.removeLivePid(pid);
+            }
+        }
+
         switch (child.status) {
             .starting => {
                 if ((now - child.last_start_time) >= (proc.config.conf.starttime * 1000)) {
                     child.status = .running;
+                }
+                // Note: .starting -> .exited transition is handled by polling above
+            },
+            .backoff => {
+                // Handle backoff expiration
+                if (child.backoff_until) |until| {
+                    if (now >= until) {
+                        // Backoff expired, decide next action based on restart policy
+                        const should_restart = switch (proc.config.conf.autorestart) {
+                            .always => true,
+                            .unexpected => if (child.exit_code) |code| !proc.isExpectedExitCode(code) else true,
+                            .never => false,
+                        };
+
+                        if (should_restart and child.retries < proc.config.conf.startretries) {
+                            // Try restarting again
+                            child.backoff_until = null;
+                            try child.restart(&proc.config, proc.arena.allocator());
+                            try self.updateLivePid(child, proc, i);
+                        } else {
+                            // No more restarts, mark as stopped or fatal
+                            child.status = if (should_restart) .fatal else .stopped;
+                            child.backoff_until = null;
+                        }
+                    }
                 }
             },
             .exited => {
@@ -233,18 +276,31 @@ fn manageProcess(self: *ProcessManager, proc: *Process) !void {
                 };
 
                 if (should_restart and child.retries < proc.config.conf.startretries) {
-                    child.retries += 1;
-                    try child.start(&proc.config, proc.arena.allocator());
-                    if (child.pid) |pid| {
-                        try self.live_pid.put(self.gpa, pid, .{ .parent = proc, .index = i });
-                    }
+                    // Use consistent restart logic through child.restart()
+                    try child.restart(&proc.config, proc.arena.allocator());
+                    try self.updateLivePid(child, proc, i);
                 } else if (!should_restart) {
                     child.status = .stopped;
                 } else {
                     child.status = .fatal;
                 }
             },
-            else => {},
+            .running => {
+                // Running state is stable, nothing to do here
+                // Transitions out of .running are handled by polling (-> .exited)
+                // or by external commands (-> .stopping)
+            },
+            .stopping => {
+                // Stopping state should transition to .exited when process actually exits
+                // This is handled by polling above, but we can add a timeout check
+                // if the process doesn't respond to signals within reasonable time
+            },
+            .stopped => {
+                // Stopped is a terminal state unless manually restarted
+            },
+            .fatal => {
+                // Fatal is a terminal state
+            },
         }
     }
 }
@@ -375,8 +431,7 @@ fn mainLoop(self: *ProcessManager) !void {
             var it = self.live.iterator();
             while (it.next()) |entry| {
                 const proc = entry.value_ptr.*;
-                const st = proc.currentStatus();
-                log.info("proc {s} -> {any}", .{ proc.config.name, st });
+                self.printProcessStatus(proc);
             }
             continue :state .process_manager_needs_to_check_for_new_command;
         },
@@ -449,11 +504,7 @@ fn mainLoop(self: *ProcessManager) !void {
             var it = self.live.iterator();
             while (it.next()) |entry| {
                 const proc = entry.value_ptr.*;
-                log.info("proc {s}: cmd={s} numprocs={d}", .{
-                    proc.config.name,
-                    proc.config.conf.cmd,
-                    proc.config.conf.numprocs,
-                });
+                self.printProcessStatus(proc);
             }
             continue :state .process_manager_needs_to_check_for_new_command;
         },
@@ -525,4 +576,64 @@ fn shutdown(self: *ProcessManager) !void {
     while (it.next()) |entry| {
         try self.stopProcess(entry.value_ptr.*);
     }
+}
+
+fn printProcessStatus(self: *ProcessManager, proc: *Process) void {
+    _ = self;
+    const status = proc.currentStatus();
+    const status_symbol = switch (status) {
+        .running => "●",
+        .stopped, .exited => "○",
+        .fatal => "✗",
+        .backoff => "◐",
+        else => "◯",
+    };
+
+    const status_color = switch (status) {
+        .running => "\x1b[32m", // green
+        .stopped, .exited => "\x1b[37m", // white
+        .fatal => "\x1b[31m", // red
+        .backoff => "\x1b[33m", // yellow
+        else => "\x1b[37m", // white
+    };
+
+    const reset_color = "\x1b[0m";
+
+    // Process name and command line
+    log.info("{s}{s}{s} {s} - {s}", .{ status_color, status_symbol, reset_color, proc.config.name, proc.config.conf.cmd });
+
+    // Loaded line
+    log.info("     Loaded: loaded (command: {s}, numprocs: {d})", .{ proc.config.conf.cmd, proc.config.conf.numprocs });
+
+    // Active line with status details
+    const status_str = switch (status) {
+        .running => "active (running)",
+        .stopped => "inactive (dead)",
+        .exited => "inactive (exited)",
+        .fatal => "failed (fatal)",
+        .backoff => "activating (backoff)",
+        else => "unknown",
+    };
+
+    log.info("     Active: {s}{s}{s}", .{ status_color, status_str, reset_color });
+
+    // Instance information
+    var running_count: usize = 0;
+    var main_pid: ?std.posix.pid_t = null;
+
+    for (proc.instances) |*inst| {
+        if (inst.status == .running) {
+            running_count += 1;
+            if (main_pid == null) main_pid = inst.pid;
+        }
+    }
+
+    if (main_pid) |pid| {
+        log.info("   Main PID: {d}", .{pid});
+    }
+
+    log.info("      Tasks: {d} (instances: {d} running/{d} total)", .{ running_count, running_count, proc.instances.len });
+
+    // Add blank line for readability
+    log.info("", .{});
 }

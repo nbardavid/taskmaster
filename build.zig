@@ -20,6 +20,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "anyline", .module = anyline },
             },
         }),
+        .linkage = .static,
     });
     b.installArtifact(common);
 
@@ -69,6 +70,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "common", .module = common.root_module },
             },
         }),
+        .linkage = .static,
     });
     b.installArtifact(client);
 

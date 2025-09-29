@@ -1,21 +1,46 @@
 {
-    "programs": {
-        "taskmaster_foo": {
-            "cmd": "/usr/bin/taskmaster_foo",
-            "numprocs": 8,
-            "stdout": "/dev/null",
-            "stderr": "/dev/null",
-            "autostart": true,
-            "autorestart": "always",
-            "exitcodes": [0, 2, 15],
-            "starttime": 3,
-            "startretries": 3,
-            "stoptime": 3,
-            "stopsignal": "KILL",
-            "workingdir": "/tmp/testtest",
-            "env": {
-                "Foo":"Bar"
-            }
-        }
+  "programs": {
+    "taskmaster_foo": {
+      "cmd": "/usr/bin/taskmaster_foo",
+      "numprocs": 1,
+      "stdout": "/dev/null",
+      "stderr": "/dev/null",
+      "autostart": true,
+      "autorestart": "always",
+      "exitcodes": [
+        0,
+        2,
+        15
+      ],
+      "starttime": 3,
+      "startretries": 3,
+      "stoptime": 3,
+      "stopsignal": "KILL",
+      "workingdir": "/tmp/testtest",
+      "env": {
+        "Foo": "Bar"
+      }
+    },
+    "bar": {
+      "cmd": "/usr/bin/time",
+      "numprocs": 8,
+      "stdout": "/dev/null",
+      "stderr": "/dev/null",
+      "autostart": true,
+      "autorestart": "always",
+      "exitcodes": [
+        0,
+        2,
+        15
+      ],
+      "starttime": 3,
+      "startretries": 3,
+      "stoptime": 3,
+      "stopsignal": "KILL",
+      "workingdir": "/tmp/testtest",
+      "env": {
+        "Foo": "Bar"
+      }
     }
+  }
 }

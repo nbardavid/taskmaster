@@ -68,15 +68,14 @@ pub fn startAll(self: *Process) !void {
 
     const arena = self.arena.allocator();
     for (self.instances) |*inst| {
-        try inst.start(&self.config, arena);
+        // Only start instances that are stopped or in fatal state
+        if (inst.status == .stopped or inst.status == .fatal) {
+            try inst.start(&self.config, arena);
+        }
     }
 
-    self.retries += 1;
     log.info("process {s}: started all children", .{self.config.name});
-
-    if (self.retries >= self.config.conf.startretries) {
-        self.applyBackoff();
-    }
+    // Remove process-level retry tracking - rely on child-level retry logic
 }
 
 pub fn stopAll(self: *Process) !void {
@@ -94,11 +93,7 @@ pub fn restartAll(self: *Process) !void {
     log.info("process {s}: restarted all children", .{self.config.name});
 }
 
-pub fn applyBackoff(self: *Process) void {
-    const now = time.milliTimestamp();
-    self.backoff_until = now + 10_000;
-    log.warn("process {s}: entering backoff until {d}", .{ self.config.name, self.backoff_until.? });
-}
+// Process-level backoff removed - handled at child level now
 
 pub fn resetRetriesIfStable(self: *Process) void {
     const now = time.milliTimestamp();

@@ -141,6 +141,7 @@ pub fn stop(self: *Child, sig: i32, timeout_ms: usize) !void {
     if (self.pid) |pid| {
         self.status = .stopping;
 
+        // Send the initial signal
         _ = posix.kill(pid, @intCast(sig)) catch |err| switch (err) {
             error.PermissionDenied, error.ProcessNotFound, error.Unexpected => {
                 self.finalizeExit(null, null);
@@ -149,8 +150,10 @@ pub fn stop(self: *Child, sig: i32, timeout_ms: usize) !void {
             else => return err,
         };
 
+        // Wait for graceful exit with timeout
         const t0 = time.milliTimestamp();
         while (true) {
+            // Try the original pattern first
             const res = posix.waitpid(pid, posix.W.NOHANG);
             if (res.pid != 0) {
                 const exit = decodeWaitStatus(res.status);
@@ -161,7 +164,17 @@ pub fn stop(self: *Child, sig: i32, timeout_ms: usize) !void {
             std.Thread.sleep(50 * time.ns_per_ms);
         }
 
-        _ = posix.kill(pid, posix.SIG.KILL) catch {};
+        // Send SIGKILL if graceful shutdown failed
+        _ = posix.kill(pid, posix.SIG.KILL) catch |err| switch (err) {
+            error.PermissionDenied, error.ProcessNotFound, error.Unexpected => {
+                // Process likely already exited
+                self.finalizeExit(null, null);
+                return;
+            },
+            else => return err,
+        };
+
+        // Wait for forced exit with shorter timeout
         const kill_deadline = time.milliTimestamp() + 1500;
         while (true) {
             const res2 = posix.waitpid(pid, posix.W.NOHANG);
@@ -175,6 +188,7 @@ pub fn stop(self: *Child, sig: i32, timeout_ms: usize) !void {
         }
     }
 
+    // If we get here, the process is unresponsive - mark it as exited anyway
     self.finalizeExit(null, null);
 }
 
@@ -187,14 +201,8 @@ pub fn kill(self: *Child) void {
 
 pub fn poll(self: *Child) !?void {
     if (self.pid) |pid| {
-        const res = posix.waitpid(pid, posix.W.NOHANG) catch |err| switch (err) {
-            error.NoChildProcesses, error.ProcessNotFound => {
-                self.finalizeExit(null, null);
-                return {};
-            },
-            error.ChildStillAlive => return null,
-            else => return err,
-        };
+        // Note: waitpid returns WaitPidResult struct, not error union in this Zig version
+        const res = posix.waitpid(pid, posix.W.NOHANG);
         if (res.pid != 0) {
             const exit = decodeWaitStatus(res.status);
             self.finalizeExit(exit.code, exit.signal);
@@ -208,9 +216,12 @@ pub fn restart(self: *Child, cfg: *const Process.Config, arena: std.mem.Allocato
     const now = time.milliTimestamp();
     self.retries += 1;
 
-    if (self.retries >= 3 and (now - self.last_start_time) < 5000) {
+    // Use configuration values instead of hardcoded ones
+    if (self.retries >= cfg.conf.startretries and (@as(u64, @intCast(now)) - self.last_start_time) < (cfg.conf.starttime * 1000)) {
         self.status = .backoff;
-        self.backoff_until = now + 10_000;
+        // Backoff time: 2x the configured start time, minimum 5 seconds
+        const backoff_time = @max(cfg.conf.starttime * 2 * 1000, 5000);
+        self.backoff_until = @as(u64, @intCast(now)) + backoff_time;
         return;
     }
 

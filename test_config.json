@@ -1,0 +1,18 @@
+{
+    "programs": {
+        "test_echo": {
+            "cmd": "echo hello world",
+            "numprocs": 1,
+            "stdout": "/tmp/test_stdout.log",
+            "stderr": "/tmp/test_stderr.log",
+            "autostart": true,
+            "autorestart": "never",
+            "exitcodes": [0],
+            "starttime": 1,
+            "startretries": 1,
+            "stoptime": 1,
+            "stopsignal": "TERM",
+            "workingdir": "/tmp"
+        }
+    }
+}
