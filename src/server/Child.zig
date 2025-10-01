@@ -31,6 +31,24 @@ const Status = enum {
     fatal,
 };
 
+pub const ProcessEvent = struct {
+    timestamp: u64, // milliseconds since epoch
+    event_type: EventType,
+    pid: ?posix.pid_t,
+    exit_code: ?u32,
+    exit_signal: ?u32,
+
+    pub const EventType = enum {
+        started,
+        running_confirmed,
+        stopped,
+        exited,
+        crashed,
+        restarted,
+        entered_backoff,
+    };
+};
+
 pid: ?posix.pid_t = null,
 status: Status = .stopped,
 retries: usize = 0,
@@ -39,11 +57,37 @@ backoff_until: ?u64 = null,
 exit_code: ?u32 = null,
 exit_signal: ?u32 = null,
 logger: *Logger,
+// Event history tracking (circular buffer)
+event_history: [10]?ProcessEvent = [_]?ProcessEvent{null} ** 10,
+event_history_index: usize = 0,
+event_count: usize = 0,
 
 pub fn init(logger: *Logger) Child {
     return .{
         .logger = logger,
     };
+}
+
+pub fn logEvent(
+    self: *Child,
+    event_type: ProcessEvent.EventType,
+    pid: ?posix.pid_t,
+    exit_code: ?u32,
+    exit_signal: ?u32,
+) void {
+    const now = time.milliTimestamp();
+    const event = ProcessEvent{
+        .timestamp = @intCast(now),
+        .event_type = event_type,
+        .pid = pid,
+        .exit_code = exit_code,
+        .exit_signal = exit_signal,
+    };
+
+    // Add to circular buffer
+    self.event_history[self.event_history_index] = event;
+    self.event_history_index = (self.event_history_index + 1) % self.event_history.len;
+    self.event_count += 1;
 }
 
 pub fn start(
@@ -98,6 +142,9 @@ pub fn start(
     self.exit_code = null;
     self.exit_signal = null;
     self.backoff_until = null;
+
+    // Log start event
+    self.logEvent(.started, pid, null, null);
 }
 
 fn buildArgv(cmd: []const u8, arena: std.mem.Allocator) ![:null]?[*:0]u8 {
@@ -160,6 +207,9 @@ fn redirectLogs(cfg: *const Process.Config) !void {
 pub fn stop(self: *Child, sig: i32, timeout_ms: usize) !void {
     if (self.pid) |pid| {
         self.status = .stopping;
+
+        // Log stopped event
+        self.logEvent(.stopped, pid, null, null);
 
         _ = posix.kill(-pid, @intCast(sig)) catch |err| switch (err) {
             error.PermissionDenied, error.ProcessNotFound, error.Unexpected => {
@@ -244,18 +294,31 @@ pub fn restart(self: *Child, cfg: *const Process.Config, arena: std.mem.Allocato
         const backoff_time = @max(cfg.conf.starttime * 2 * 1000, 5000);
         self.backoff_until = @as(u64, @intCast(now)) + backoff_time;
         self.logger.warn("child entered backoff after {d} failed start attempts", .{self.retries});
+
+        // Log backoff event
+        self.logEvent(.entered_backoff, self.pid, null, null);
         return;
     }
+
+    // Log restart event
+    self.logEvent(.restarted, self.pid, null, null);
 
     try self.stop(posix.SIG.TERM, cfg.conf.stoptime * 1000);
     try self.start(cfg, arena);
 }
 
 pub fn finalizeExit(self: *Child, exit_code: ?u32, exit_signal: ?u32) void {
+    const old_pid = self.pid;
     self.pid = null;
     self.exit_code = exit_code;
     self.exit_signal = exit_signal;
     self.status = .exited;
+
+    // Log exit event - distinguish between normal exit and crash
+    // A crash is when we have a non-zero exit code or a signal
+    const is_crash = (exit_code != null and exit_code.? != 0) or exit_signal != null;
+    const event_type: ProcessEvent.EventType = if (is_crash) .crashed else .exited;
+    self.logEvent(event_type, old_pid, exit_code, exit_signal);
 }
 
 fn decodeWaitStatus(status: u32) struct { code: ?u32, signal: ?u32 } {
