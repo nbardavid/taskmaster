@@ -1,6 +1,6 @@
 {
   "programs": {
-    "test_autostart_true": {
+    "autostart_true": {
       "cmd": "zig-out/bin/long_runner 0",
       "numprocs": 2,
       "autostart": true,
@@ -15,7 +15,7 @@
       "stdout": "/tmp/eval_autostart_true.stdout",
       "stderr": "/tmp/eval_autostart_true.stderr"
     },
-    "test_autostart_false": {
+    "autostart_false": {
       "cmd": "zig-out/bin/simple_success",
       "numprocs": 1,
       "autostart": false,
@@ -30,7 +30,7 @@
       "stdout": "/tmp/eval_autostart_false.stdout",
       "stderr": "/tmp/eval_autostart_false.stderr"
     },
-    "test_autorestart_never": {
+    "autorestart_never": {
       "cmd": "zig-out/bin/simple_success",
       "numprocs": 1,
       "autostart": false,
@@ -45,7 +45,7 @@
       "stdout": "/tmp/eval_autorestart_never.stdout",
       "stderr": "/tmp/eval_autorestart_never.stderr"
     },
-    "test_autorestart_unexpected": {
+    "autorestart_unexpected": {
       "cmd": "zig-out/bin/simple_failure",
       "numprocs": 1,
       "autostart": false,
@@ -60,7 +60,7 @@
       "stdout": "/tmp/eval_autorestart_unexpected.stdout",
       "stderr": "/tmp/eval_autorestart_unexpected.stderr"
     },
-    "test_autorestart_always": {
+    "autorestart_always": {
       "cmd": "zig-out/bin/code_selector 0",
       "numprocs": 1,
       "autostart": false,
@@ -75,7 +75,7 @@
       "stdout": "/tmp/eval_autorestart_always.stdout",
       "stderr": "/tmp/eval_autorestart_always.stderr"
     },
-    "test_exitcodes_expected": {
+    "exitcodes_expected": {
       "cmd": "zig-out/bin/code_selector 42",
       "numprocs": 1,
       "autostart": false,
@@ -92,7 +92,7 @@
       "stdout": "/tmp/eval_exitcodes_expected.stdout",
       "stderr": "/tmp/eval_exitcodes_expected.stderr"
     },
-    "test_exitcodes_unexpected": {
+    "exitcodes_unexpected": {
       "cmd": "zig-out/bin/code_selector 99",
       "numprocs": 1,
       "autostart": false,
@@ -108,7 +108,7 @@
       "stdout": "/tmp/eval_exitcodes_unexpected.stdout",
       "stderr": "/tmp/eval_exitcodes_unexpected.stderr"
     },
-    "test_starttime": {
+    "starttime": {
       "cmd": "zig-out/bin/startup_slow 6 10",
       "numprocs": 1,
       "autostart": false,
@@ -123,7 +123,7 @@
       "stdout": "/tmp/eval_starttime.stdout",
       "stderr": "/tmp/eval_starttime.stderr"
     },
-    "test_startretries_abort": {
+    "startretries_abort": {
       "cmd": "zig-out/bin/crash_immediately",
       "numprocs": 1,
       "autostart": false,
@@ -138,7 +138,7 @@
       "stdout": "/tmp/eval_startretries.stdout",
       "stderr": "/tmp/eval_startretries.stderr"
     },
-    "test_stopsignal_term": {
+    "stopsignal_term": {
       "cmd": "zig-out/bin/signal_catcher",
       "numprocs": 1,
       "autostart": false,
@@ -153,7 +153,7 @@
       "stdout": "/tmp/eval_stopsignal_term.stdout",
       "stderr": "/tmp/eval_stopsignal_term.stderr"
     },
-    "test_stopsignal_int": {
+    "stopsignal_int": {
       "cmd": "zig-out/bin/signal_catcher",
       "numprocs": 1,
       "autostart": false,
@@ -168,7 +168,7 @@
       "stdout": "/tmp/eval_stopsignal_int.stdout",
       "stderr": "/tmp/eval_stopsignal_int.stderr"
     },
-    "test_stoptime_kill": {
+    "stoptime_kill": {
       "cmd": "zig-out/bin/long_runner 0",
       "numprocs": 1,
       "autostart": false,
@@ -183,7 +183,7 @@
       "stdout": "/tmp/eval_stoptime.stdout",
       "stderr": "/tmp/eval_stoptime.stderr"
     },
-    "test_stdout_stderr": {
+    "stdout_stderr": {
       "cmd": "zig-out/bin/stdout_spammer 10",
       "numprocs": 1,
       "autostart": false,
@@ -198,7 +198,7 @@
       "stdout": "/tmp/eval_stdout.log",
       "stderr": "/tmp/eval_stderr.log"
     },
-    "test_env_vars": {
+    "env_vars": {
       "cmd": "zig-out/bin/env_printer",
       "numprocs": 1,
       "autostart": false,
@@ -213,12 +213,12 @@
       "stdout": "/tmp/eval_env.stdout",
       "stderr": "/tmp/eval_env.stderr",
       "env": {
-        "TEST_VAR1": "test_value_1",
-        "TEST_VAR2": "test_value_2",
+        "TEST_VAR1": "value_1",
+        "TEST_VAR2": "value_2",
         "EVAL_MODE": "evaluation"
       }
     },
-    "test_workdir": {
+    "workdir": {
       "cmd": "zig-out/bin/workdir_printer",
       "numprocs": 1,
       "autostart": false,
@@ -234,7 +234,7 @@
       "stderr": "/tmp/eval_workdir.stderr",
       "workingdir": "/tmp"
     },
-    "test_numprocs": {
+    "numprocs": {
       "cmd": "zig-out/bin/long_runner 60",
       "numprocs": 5,
       "autostart": false,
@@ -249,7 +249,7 @@
       "stdout": "/tmp/eval_numprocs.stdout",
       "stderr": "/tmp/eval_numprocs.stderr"
     },
-    "test_umask": {
+    "umask": {
       "cmd": "zig-out/bin/simple_success",
       "numprocs": 1,
       "autostart": false,

@@ -1,0 +1,150 @@
+2025-10-01 08:19:14.000 +02:00 | [info]state=SERVER_SETUP_SIGNALS
+2025-10-01 08:19:14.000 +02:00 | [info]signal handlers installed for HUP, TERM, INT, CHLD, QUIT, USR1, USR2
+2025-10-01 08:19:14.000 +02:00 | [info]signal handlers setup successfully
+2025-10-01 08:19:14.000 +02:00 | [info]state=SERVER_INIT_PROCESS_MANAGER
+2025-10-01 08:19:14.000 +02:00 | [info]process manager started successfully
+2025-10-01 08:19:14.000 +02:00 | [info]state=SERVER_INIT_MAILBOX
+2025-10-01 08:19:14.000 +02:00 | [info]state=LOAD_INITIAL_CONFIG
+2025-10-01 08:19:14.000 +02:00 | [info]mailbox started successfully
+2025-10-01 08:19:14.000 +02:00 | [info]MAILBOX thread start: self_ptr=0x7ffe6d552760
+2025-10-01 08:19:14.000 +02:00 | [info]state=MAILBOX_NOT_OPEN stop=false srv_null=true
+2025-10-01 08:19:14.000 +02:00 | [info]socket created fd=5
+2025-10-01 08:19:14.000 +02:00 | [info]bound unix socket at /tmp/taskmaster.server.sock
+2025-10-01 08:19:14.000 +02:00 | [info]listening on mailbox socket (fd=5)
+2025-10-01 08:19:14.000 +02:00 | [info]server set: srv_null=false fd=5
+2025-10-01 08:19:14.000 +02:00 | [info]config loaded successfully
+2025-10-01 08:19:14.000 +02:00 | [info]state=STAGE_NEW_CONFIG
+2025-10-01 08:19:14.000 +02:00 | [info]staged new config successfully (17 processes)
+2025-10-01 08:19:14.000 +02:00 | [info]state=COMMIT_NEW_CONFIG
+2025-10-01 08:19:14.000 +02:00 | [info]starting process autostart_true[0] (current status: stopped)
+2025-10-01 08:19:14.000 +02:00 | [info][child.start] cmd=zig-out/bin/long_runner 0
+2025-10-01 08:19:14.000 +02:00 | [info][child.start] argv[0]=zig-out/bin/long_runner
+2025-10-01 08:19:14.000 +02:00 | [debug]updated live PID tracking: pid=155579 for process autostart_true[0]
+2025-10-01 08:19:14.000 +02:00 | [info]starting process autostart_true[1] (current status: stopped)
+2025-10-01 08:19:14.000 +02:00 | [info][child.start] cmd=zig-out/bin/long_runner 0
+2025-10-01 08:19:14.000 +02:00 | [info][child.start] argv[0]=zig-out/bin/long_runner
+2025-10-01 08:19:14.000 +02:00 | [debug]updated live PID tracking: pid=155580 for process autostart_true[1]
+2025-10-01 08:19:14.000 +02:00 | [info]committed new config (17 live processes)
+2025-10-01 08:19:14.000 +02:00 | [info]process pid=155579 exited with code=127 signal=null
+2025-10-01 08:19:14.000 +02:00 | [debug]removed PID 155579 from live tracking
+2025-10-01 08:19:14.000 +02:00 | [info]detected exit of process autostart_true[0] pid=155579
+2025-10-01 08:19:14.000 +02:00 | [info]process autostart_true[0] failed to start, retrying (1/3)
+2025-10-01 08:19:14.000 +02:00 | [info][child.start] cmd=zig-out/bin/long_runner 0
+2025-10-01 08:19:14.000 +02:00 | [info][child.start] argv[0]=zig-out/bin/long_runner
+2025-10-01 08:19:14.000 +02:00 | [debug]updated live PID tracking: pid=155581 for process autostart_true[0]
+2025-10-01 08:19:14.000 +02:00 | [info]process pid=155580 exited with code=127 signal=null
+2025-10-01 08:19:14.000 +02:00 | [debug]removed PID 155580 from live tracking
+2025-10-01 08:19:14.000 +02:00 | [info]detected exit of process autostart_true[1] pid=155580
+2025-10-01 08:19:14.000 +02:00 | [info]process autostart_true[1] failed to start, retrying (1/3)
+2025-10-01 08:19:14.000 +02:00 | [info][child.start] cmd=zig-out/bin/long_runner 0
+2025-10-01 08:19:14.000 +02:00 | [info][child.start] argv[0]=zig-out/bin/long_runner
+2025-10-01 08:19:14.000 +02:00 | [debug]updated live PID tracking: pid=155582 for process autostart_true[1]
+2025-10-01 08:19:14.000 +02:00 | [info]process pid=155581 exited with code=127 signal=null
+2025-10-01 08:19:14.000 +02:00 | [debug]removed PID 155581 from live tracking
+2025-10-01 08:19:14.000 +02:00 | [info]detected exit of process autostart_true[0] pid=155581
+2025-10-01 08:19:14.000 +02:00 | [info]process autostart_true[0] failed to start, retrying (2/3)
+2025-10-01 08:19:14.000 +02:00 | [info][child.start] cmd=zig-out/bin/long_runner 0
+2025-10-01 08:19:14.000 +02:00 | [info][child.start] argv[0]=zig-out/bin/long_runner
+2025-10-01 08:19:14.000 +02:00 | [debug]signals detected - sighup=false sigterm=false sigint=false sigchld=true
+2025-10-01 08:19:14.000 +02:00 | [debug]received SIGCHLD - child process state changed
+2025-10-01 08:19:14.000 +02:00 | [debug]updated live PID tracking: pid=155583 for process autostart_true[0]
+2025-10-01 08:19:14.000 +02:00 | [info]process pid=155582 exited with code=127 signal=null
+2025-10-01 08:19:14.000 +02:00 | [debug]removed PID 155582 from live tracking
+2025-10-01 08:19:14.000 +02:00 | [info]detected exit of process autostart_true[1] pid=155582
+2025-10-01 08:19:14.000 +02:00 | [info]process autostart_true[1] failed to start, retrying (2/3)
+2025-10-01 08:19:14.000 +02:00 | [info][child.start] cmd=zig-out/bin/long_runner 0
+2025-10-01 08:19:14.000 +02:00 | [info][child.start] argv[0]=zig-out/bin/long_runner
+2025-10-01 08:19:14.000 +02:00 | [debug]updated live PID tracking: pid=155584 for process autostart_true[1]
+2025-10-01 08:19:14.000 +02:00 | [info]process pid=155583 exited with code=127 signal=null
+2025-10-01 08:19:14.000 +02:00 | [debug]removed PID 155583 from live tracking
+2025-10-01 08:19:14.000 +02:00 | [info]detected exit of process autostart_true[0] pid=155583
+2025-10-01 08:19:14.000 +02:00 | [info]process autostart_true[0] failed to start, retrying (3/3)
+2025-10-01 08:19:14.000 +02:00 | [warn]child entered backoff after 3 failed start attempts
+2025-10-01 08:19:14.000 +02:00 | [warn]attempted to update live PID tracking but child has no PID for process autostart_true[0]
+2025-10-01 08:19:14.000 +02:00 | [info]process pid=155584 exited with code=127 signal=null
+2025-10-01 08:19:14.000 +02:00 | [debug]removed PID 155584 from live tracking
+2025-10-01 08:19:14.000 +02:00 | [info]detected exit of process autostart_true[1] pid=155584
+2025-10-01 08:19:14.000 +02:00 | [info]process autostart_true[1] failed to start, retrying (3/3)
+2025-10-01 08:19:14.000 +02:00 | [warn]child entered backoff after 3 failed start attempts
+2025-10-01 08:19:14.000 +02:00 | [warn]attempted to update live PID tracking but child has no PID for process autostart_true[1]
+2025-10-01 08:19:14.000 +02:00 | [debug]signals detected - sighup=false sigterm=false sigint=false sigchld=true
+2025-10-01 08:19:14.000 +02:00 | [debug]received SIGCHLD - child process state changed
+2025-10-01 08:19:20.000 +02:00 | [error]process autostart_true[0] exceeded retry limit after backoff
+2025-10-01 08:19:20.000 +02:00 | [error]process autostart_true[1] exceeded retry limit after backoff
+2025-10-01 08:19:25.000 +02:00 | [info]accepted new client: fd=6
+2025-10-01 08:19:25.000 +02:00 | [info]state=MAILBOX_ACCEPTED_NEW_CLIENT stop=false cli_null=false
+2025-10-01 08:19:30.000 +02:00 | [info]peeked client command: .dump
+2025-10-01 08:19:30.000 +02:00 | [info]state=MAILBOX_DECODE_CLIENT_COMMAND
+2025-10-01 08:19:30.000 +02:00 | [info]client command: .dump
+2025-10-01 08:19:30.000 +02:00 | [info]bell triggered due to client command
+2025-10-01 08:19:30.000 +02:00 | [info]received command: .dump
+2025-10-01 08:19:30.000 +02:00 | [info]state=SERVER_EXEC_NEW_COMMAND
+2025-10-01 08:19:30.000 +02:00 | [info]executed command .dump, resuming wait
+2025-10-01 08:19:30.000 +02:00 | [info]state=PM_NEEDS_TO_WAIT_FOR_COMMANDS 
+2025-10-01 08:19:30.000 +02:00 | [info]state=PM_NEEDS_TO_EXEC_COMMAND
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[0]: status=fatal, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[1]: status=fatal, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[1]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[2]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[3]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[4]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:19:30.000 +02:00 | [debug]response queued: status=success len=6540
+2025-10-01 08:19:30.000 +02:00 | [info]sent dump for all processes
+2025-10-01 08:19:30.000 +02:00 | [info]state=MAILBOX_SEND_RESPONSE
+2025-10-01 08:19:30.000 +02:00 | [debug]sent response header: status=success len=6540
+2025-10-01 08:19:30.000 +02:00 | [debug]sent response payload: 6540 bytes
+2025-10-01 08:19:30.000 +02:00 | [info]response sent successfully
+2025-10-01 08:20:00.000 +02:00 | [info]peeked client command: .dump
+2025-10-01 08:20:00.000 +02:00 | [info]state=MAILBOX_DECODE_CLIENT_COMMAND
+2025-10-01 08:20:00.000 +02:00 | [info]client command: .dump
+2025-10-01 08:20:00.000 +02:00 | [info]bell triggered due to client command
+2025-10-01 08:20:00.000 +02:00 | [info]received command: .dump
+2025-10-01 08:20:00.000 +02:00 | [info]state=SERVER_EXEC_NEW_COMMAND
+2025-10-01 08:20:00.000 +02:00 | [info]executed command .dump, resuming wait
+2025-10-01 08:20:00.000 +02:00 | [info]state=PM_NEEDS_TO_WAIT_FOR_COMMANDS 
+2025-10-01 08:20:00.000 +02:00 | [info]state=PM_NEEDS_TO_EXEC_COMMAND
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[0]: status=fatal, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[1]: status=fatal, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[1]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[2]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[3]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[4]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:20:00.000 +02:00 | [debug]response queued: status=success len=6540
+2025-10-01 08:20:00.000 +02:00 | [info]sent dump for all processes
+2025-10-01 08:20:00.000 +02:00 | [info]state=MAILBOX_SEND_RESPONSE
+2025-10-01 08:20:00.000 +02:00 | [debug]sent response header: status=success len=6540
+2025-10-01 08:20:00.000 +02:00 | [debug]sent response payload: 6540 bytes
+2025-10-01 08:20:00.000 +02:00 | [info]response sent successfully
+2025-10-01 08:20:26.000 +02:00

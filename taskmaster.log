@@ -1,0 +1,158 @@
+2025-10-01 08:21:37.000 +02:00 | [info]state=SERVER_SETUP_SIGNALS
+2025-10-01 08:21:37.000 +02:00 | [info]signal handlers installed for HUP, TERM, INT, CHLD, QUIT, USR1, USR2
+2025-10-01 08:21:37.000 +02:00 | [info]signal handlers setup successfully
+2025-10-01 08:21:37.000 +02:00 | [info]state=SERVER_INIT_PROCESS_MANAGER
+2025-10-01 08:21:37.000 +02:00 | [info]process manager started successfully
+2025-10-01 08:21:37.000 +02:00 | [info]state=SERVER_INIT_MAILBOX
+2025-10-01 08:21:37.000 +02:00 | [info]state=LOAD_INITIAL_CONFIG
+2025-10-01 08:21:37.000 +02:00 | [info]mailbox started successfully
+2025-10-01 08:21:37.000 +02:00 | [info]MAILBOX thread start: self_ptr=0x7ffdf41eda20
+2025-10-01 08:21:37.000 +02:00 | [info]state=MAILBOX_NOT_OPEN stop=false srv_null=true
+2025-10-01 08:21:37.000 +02:00 | [info]socket created fd=5
+2025-10-01 08:21:37.000 +02:00 | [info]bound unix socket at /tmp/taskmaster.server.sock
+2025-10-01 08:21:37.000 +02:00 | [info]listening on mailbox socket (fd=5)
+2025-10-01 08:21:37.000 +02:00 | [info]server set: srv_null=false fd=5
+2025-10-01 08:21:37.000 +02:00 | [info]config loaded successfully
+2025-10-01 08:21:37.000 +02:00 | [info]state=STAGE_NEW_CONFIG
+2025-10-01 08:21:37.000 +02:00 | [info]staged new config successfully (17 processes)
+2025-10-01 08:21:37.000 +02:00 | [info]state=COMMIT_NEW_CONFIG
+2025-10-01 08:21:37.000 +02:00 | [info]starting process autostart_true[0] (current status: stopped)
+2025-10-01 08:21:37.000 +02:00 | [info][child.start] cmd=zig-out/bin/long_runner 0
+2025-10-01 08:21:37.000 +02:00 | [info][child.start] argv[0]=zig-out/bin/long_runner
+2025-10-01 08:21:37.000 +02:00 | [debug]updated live PID tracking: pid=157944 for process autostart_true[0]
+2025-10-01 08:21:37.000 +02:00 | [info]starting process autostart_true[1] (current status: stopped)
+2025-10-01 08:21:37.000 +02:00 | [info][child.start] cmd=zig-out/bin/long_runner 0
+2025-10-01 08:21:37.000 +02:00 | [info][child.start] argv[0]=zig-out/bin/long_runner
+2025-10-01 08:21:37.000 +02:00 | [debug]updated live PID tracking: pid=157945 for process autostart_true[1]
+2025-10-01 08:21:37.000 +02:00 | [info]committed new config (17 live processes)
+2025-10-01 08:21:40.000 +02:00 | [debug]updated live PID tracking: pid=157944 for process autostart_true[0]
+2025-10-01 08:21:40.000 +02:00 | [info]process autostart_true[0] marked as successfully started (retries reset)
+2025-10-01 08:21:40.000 +02:00 | [debug]updated live PID tracking: pid=157945 for process autostart_true[1]
+2025-10-01 08:21:40.000 +02:00 | [info]process autostart_true[1] marked as successfully started (retries reset)
+2025-10-01 08:21:46.000 +02:00 | [info]accepted new client: fd=6
+2025-10-01 08:21:46.000 +02:00 | [info]state=MAILBOX_ACCEPTED_NEW_CLIENT stop=false cli_null=false
+2025-10-01 08:22:34.000 +02:00 | [info]peeked client command: .dump
+2025-10-01 08:22:34.000 +02:00 | [info]state=MAILBOX_DECODE_CLIENT_COMMAND
+2025-10-01 08:22:34.000 +02:00 | [info]client command: .dump
+2025-10-01 08:22:34.000 +02:00 | [info]bell triggered due to client command
+2025-10-01 08:22:34.000 +02:00 | [info]received command: .dump
+2025-10-01 08:22:34.000 +02:00 | [info]state=SERVER_EXEC_NEW_COMMAND
+2025-10-01 08:22:34.000 +02:00 | [info]executed command .dump, resuming wait
+2025-10-01 08:22:34.000 +02:00 | [info]state=PM_NEEDS_TO_WAIT_FOR_COMMANDS 
+2025-10-01 08:22:34.000 +02:00 | [info]state=PM_NEEDS_TO_EXEC_COMMAND
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[0]: status=running, pid=157944
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[1]: status=running, pid=157945
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[1]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[2]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[3]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[4]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:22:34.000 +02:00 | [debug]response queued: status=success len=6444
+2025-10-01 08:22:34.000 +02:00 | [info]sent dump for all processes
+2025-10-01 08:22:34.000 +02:00 | [info]state=MAILBOX_SEND_RESPONSE
+2025-10-01 08:22:34.000 +02:00 | [debug]sent response header: status=success len=6444
+2025-10-01 08:22:34.000 +02:00 | [debug]sent response payload: 6444 bytes
+2025-10-01 08:22:34.000 +02:00 | [info]response sent successfully
+2025-10-01 08:23:07.000 +02:00 | [info]peeked client command: .start
+2025-10-01 08:23:07.000 +02:00 | [info]state=MAILBOX_DECODE_CLIENT_COMMAND
+2025-10-01 08:23:07.000 +02:00 | [info]client command: .start (payload 15 bytes)
+2025-10-01 08:23:07.000 +02:00 | [info]bell triggered due to client command
+2025-10-01 08:23:07.000 +02:00 | [info]received command: .start
+2025-10-01 08:23:07.000 +02:00 | [info]state=SERVER_EXEC_NEW_COMMAND
+2025-10-01 08:23:07.000 +02:00 | [info]executed command .start, resuming wait
+2025-10-01 08:23:07.000 +02:00 | [info]state=PM_NEEDS_TO_WAIT_FOR_COMMANDS 
+2025-10-01 08:23:07.000 +02:00 | [info]state=PM_NEEDS_TO_EXEC_COMMAND
+2025-10-01 08:23:07.000 +02:00 | [info]starting process autostart_false[0] (current status: stopped)
+2025-10-01 08:23:07.000 +02:00 | [info][child.start] cmd=zig-out/bin/simple_success
+2025-10-01 08:23:07.000 +02:00 | [info][child.start] argv[0]=zig-out/bin/simple_success
+2025-10-01 08:23:07.000 +02:00 | [debug]updated live PID tracking: pid=158242 for process autostart_false[0]
+2025-10-01 08:23:07.000 +02:00 | [debug]response queued: status=success len=61
+2025-10-01 08:23:07.000 +02:00 | [info]started autostart_false
+2025-10-01 08:23:07.000 +02:00 | [info]state=MAILBOX_SEND_RESPONSE
+2025-10-01 08:23:07.000 +02:00 | [debug]sent response header: status=success len=61
+2025-10-01 08:23:07.000 +02:00 | [debug]sent response payload: 61 bytes
+2025-10-01 08:23:07.000 +02:00 | [info]response sent successfully
+2025-10-01 08:23:08.000 +02:00 | [debug]updated live PID tracking: pid=158242 for process autostart_false[0]
+2025-10-01 08:23:08.000 +02:00 | [info]process autostart_false[0] marked as successfully started (retries reset)
+2025-10-01 08:23:09.000 +02:00 | [info]process pid=158242 exited with code=0 signal=null
+2025-10-01 08:23:09.000 +02:00 | [debug]removed PID 158242 from live tracking
+2025-10-01 08:23:09.000 +02:00 | [info]detected exit of process autostart_false[0] pid=158242
+2025-10-01 08:23:09.000 +02:00 | [info]process autostart_false[0] stopped (expected exit)
+2025-10-01 08:23:09.000 +02:00 | [debug]signals detected - sighup=false sigterm=false sigint=false sigchld=true
+2025-10-01 08:23:09.000 +02:00 | [debug]received SIGCHLD - child process state changed
+2025-10-01 08:23:25.000 +02:00 | [info]peeked client command: .status
+2025-10-01 08:23:25.000 +02:00 | [info]state=MAILBOX_DECODE_CLIENT_COMMAND
+2025-10-01 08:23:25.000 +02:00 | [info]client command: .status (payload 15 bytes)
+2025-10-01 08:23:25.000 +02:00 | [info]bell triggered due to client command
+2025-10-01 08:23:25.000 +02:00 | [info]received command: .status
+2025-10-01 08:23:25.000 +02:00 | [info]state=SERVER_EXEC_NEW_COMMAND
+2025-10-01 08:23:25.000 +02:00 | [info]executed command .status, resuming wait
+2025-10-01 08:23:25.000 +02:00 | [info]state=PM_NEEDS_TO_WAIT_FOR_COMMANDS 
+2025-10-01 08:23:25.000 +02:00 | [info]state=PM_NEEDS_TO_EXEC_COMMAND
+2025-10-01 08:23:25.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:23:25.000 +02:00 | [debug]response queued: status=success len=491
+2025-10-01 08:23:25.000 +02:00 | [info]sent status for autostart_false
+2025-10-01 08:23:25.000 +02:00 | [info]state=MAILBOX_SEND_RESPONSE
+2025-10-01 08:23:25.000 +02:00 | [debug]sent response header: status=success len=491
+2025-10-01 08:23:25.000 +02:00 | [debug]sent response payload: 491 bytes
+2025-10-01 08:23:25.000 +02:00 | [info]response sent successfully
+2025-10-01 08:25:03.000 +02:00 | [info]peeked client command: .status
+2025-10-01 08:25:03.000 +02:00 | [info]state=MAILBOX_DECODE_CLIENT_COMMAND
+2025-10-01 08:25:03.000 +02:00 | [info]client command: .status (payload 15 bytes)
+2025-10-01 08:25:03.000 +02:00 | [info]bell triggered due to client command
+2025-10-01 08:25:03.000 +02:00 | [info]received command: .status
+2025-10-01 08:25:03.000 +02:00 | [info]state=SERVER_EXEC_NEW_COMMAND
+2025-10-01 08:25:03.000 +02:00 | [info]executed command .status, resuming wait
+2025-10-01 08:25:03.000 +02:00 | [info]state=PM_NEEDS_TO_WAIT_FOR_COMMANDS 
+2025-10-01 08:25:03.000 +02:00 | [info]state=PM_NEEDS_TO_EXEC_COMMAND
+2025-10-01 08:25:03.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:25:03.000 +02:00 | [debug]response queued: status=success len=491
+2025-10-01 08:25:03.000 +02:00 | [info]sent status for autostart_false
+2025-10-01 08:25:03.000 +02:00 | [info]state=MAILBOX_SEND_RESPONSE
+2025-10-01 08:25:03.000 +02:00 | [debug]sent response header: status=success len=491
+2025-10-01 08:25:03.000 +02:00 | [debug]sent response payload: 491 bytes
+2025-10-01 08:25:03.000 +02:00 | [info]response sent successfully
+2025-10-01 08:25:04.000 +02:00 | [info]peeked client command: .status
+2025-10-01 08:25:04.000 +02:00 | [info]state=MAILBOX_DECODE_CLIENT_COMMAND
+2025-10-01 08:25:04.000 +02:00 | [info]client command: .status (payload 15 bytes)
+2025-10-01 08:25:04.000 +02:00 | [info]bell triggered due to client command
+2025-10-01 08:25:04.000 +02:00 | [info]received command: .status
+2025-10-01 08:25:04.000 +02:00 | [info]state=SERVER_EXEC_NEW_COMMAND
+2025-10-01 08:25:04.000 +02:00 | [info]executed command .status, resuming wait
+2025-10-01 08:25:04.000 +02:00 | [info]state=PM_NEEDS_TO_WAIT_FOR_COMMANDS 
+2025-10-01 08:25:04.000 +02:00 | [info]state=PM_NEEDS_TO_EXEC_COMMAND
+2025-10-01 08:25:04.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:25:04.000 +02:00 | [debug]response queued: status=success len=491
+2025-10-01 08:25:04.000 +02:00 | [info]sent status for autostart_false
+2025-10-01 08:25:04.000 +02:00 | [info]state=MAILBOX_SEND_RESPONSE
+2025-10-01 08:25:04.000 +02:00 | [debug]sent response header: status=success len=491
+2025-10-01 08:25:04.000 +02:00 | [debug]sent response payload: 491 bytes
+2025-10-01 08:25:04.000 +02:00 | [info]response sent successfully
+2025-10-01 08:25:08.000 +02:00 | [info]peeked client command: .status
+2025-10-01 08:25:08.000 +02:00 | [info]state=MAILBOX_DECODE_CLIENT_COMMAND
+2025-10-01 08:25:08.000 +02:00 | [info]client command: .status (payload 15 bytes)
+2025-10-01 08:25:08.000 +02:00 | [info]bell triggered due to client command
+2025-10-01 08:25:08.000 +02:00 | [info]received command: .status
+2025-10-01 08:25:08.000 +02:00 | [info]state=SERVER_EXEC_NEW_COMMAND
+2025-10-01 08:25:08.000 +02:00 | [info]executed command .status, resuming wait
+2025-10-01 08:25:08.000 +02:00 | [info]state=PM_NEEDS_TO_WAIT_FOR_COMMANDS 
+2025-10-01 08:25:08.000 +02:00 | [info]state=PM_NEEDS_TO_EXEC_COMMAND
+2025-10-01 08:25:08.000 +02:00 | [debug]  Instance[0]: status=stopped, pid=null
+2025-10-01 08:25:08.000 +02:00 | [debug]response queued: status=success len=491
+2025-10-01 08:25:08.000 +02:00 | [info]sent status for autostart_false
+2025-10-01 08:25:08.000 +02:00

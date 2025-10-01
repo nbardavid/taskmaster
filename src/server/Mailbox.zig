@@ -52,6 +52,11 @@ pub fn deinit(self: *Mailbox) void {
     if (self.response_payload_owned and self.response_payload.len > 0) {
         self.gpa.free(self.response_payload);
     }
+
+    // Clean up socket file on shutdown
+    fs.cwd().deleteFile(self.unix_socket_path) catch |err| {
+        self.logger.warn("failed to delete socket file during cleanup: {}", .{err});
+    };
 }
 
 pub fn start(self: *Mailbox) !void {
