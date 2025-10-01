@@ -1,0 +1,7 @@
+Back=====
+Ordre des signaux en backend
+reload ne devrait pas redemarer les autostart
+
+Front=====
+le realod en front
+one line client go ./taskmaster-client -c start foo
