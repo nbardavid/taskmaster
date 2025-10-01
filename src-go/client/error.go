@@ -2,8 +2,6 @@ package client
 
 import "log"
 
-
-
 func ReceivedInvalidCommand (ctx *Context) StateFunc {
 	log.Printf("Invalid Command: %s\n", ctx.err.Error())
 	return FetchInputs
