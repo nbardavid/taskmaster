@@ -27,6 +27,7 @@ new_cmd: std.atomic.Value(bool) = .{ .raw = false },
 cmd: common.Command,
 cmd_payload: [256]u8,
 logger: *Logger,
+mailbox: ?*@import("Mailbox.zig") = null,
 
 pub const ProcessChild = struct {
     parent: *Process,
@@ -46,6 +47,10 @@ pub fn init(gpa: mem.Allocator, config_file_path: []const u8, logger: *Logger) P
         .cmd_payload = undefined,
         .logger = logger,
     };
+}
+
+pub fn setMailbox(self: *ProcessManager, mailbox: *@import("Mailbox.zig")) void {
+    self.mailbox = mailbox;
 }
 
 pub fn deinit(self: *ProcessManager) void {
@@ -73,6 +78,18 @@ pub fn start(self: *ProcessManager) !void {
     self.thread = thread;
 }
 
+fn sendResponse(self: *ProcessManager, status: common.ResponseStatus, payload: []const u8) void {
+    if (self.mailbox) |mb| {
+        const response = common.Response{
+            .status = status,
+            .payload_len = @intCast(@min(payload.len, std.math.maxInt(u16))),
+        };
+        mb.sendResponse(response, payload);
+    } else {
+        self.logger.warn("cannot send response: mailbox not set", .{});
+    }
+}
+
 fn checkForNewCommand(self: *ProcessManager, out_cmd: *common.Command, out_cmd_payload: *[256]u8) bool {
     if (self.new_cmd.load(.acquire)) {
         out_cmd.* = self.cmd;
@@ -93,6 +110,10 @@ fn stageNewConfig(self: *ProcessManager, parsed: *Config.ParsedResult) !HashMap(
     var result_map = parsed.getResultMap();
     const total_processes: usize = result_map.map.count();
 
+    if (total_processes == 0) {
+        return HashMap(*Process).empty;
+    }
+
     var list: ArrayListUnmanaged(*Process) = .empty;
     defer list.deinit(self.gpa);
     errdefer {
@@ -112,7 +133,15 @@ fn stageNewConfig(self: *ProcessManager, parsed: *Config.ParsedResult) !HashMap(
     }
 
     var new_staged: HashMap(*Process) = .empty;
-    errdefer new_staged.deinit(self.gpa);
+    errdefer {
+        if (new_staged.count() > 0) {
+            var cleanup_it = new_staged.iterator();
+            while (cleanup_it.next()) |entry| {
+                entry.value_ptr.*.destroy(self.gpa);
+            }
+        }
+        new_staged.deinit(self.gpa);
+    }
 
     try new_staged.ensureUnusedCapacity(self.gpa, total_processes);
     for (list.items) |process| {
@@ -123,6 +152,12 @@ fn stageNewConfig(self: *ProcessManager, parsed: *Config.ParsedResult) !HashMap(
 }
 
 fn cleanupStagedConfig(self: *ProcessManager, staged: *HashMap(*Process)) void {
+    if (staged.count() == 0) {
+        staged.deinit(self.gpa);
+        staged.* = HashMap(*Process).empty;
+        return;
+    }
+
     var it = staged.iterator();
     while (it.next()) |entry| {
         entry.value_ptr.*.destroy(self.gpa);
@@ -147,15 +182,21 @@ fn commitStagedConfig(self: *ProcessManager, staged: *HashMap(*Process)) !HashMa
 
             if (staged_hash == old_hash) {
                 staged_proc.destroy(self.gpa);
-                try new_live.put(self.gpa, name, old_proc);
+                // Use old_proc's name since we just freed staged_proc
+                try new_live.put(self.gpa, old_proc.config.name, old_proc);
+                if (old_proc.config.conf.autostart) {
+                    try self.startProcess(old_proc);
+                }
             } else {
                 try self.stopProcess(old_proc);
-                try new_live.put(self.gpa, name, staged_proc);
+                // Use staged_proc's name since it's still alive
+                try new_live.put(self.gpa, staged_proc.config.name, staged_proc);
                 if (staged_proc.config.conf.autostart)
                     try self.startProcess(staged_proc);
             }
         } else {
-            try new_live.put(self.gpa, name, staged_proc);
+            // Use staged_proc's name since it's still alive
+            try new_live.put(self.gpa, staged_proc.config.name, staged_proc);
             if (staged_proc.config.conf.autostart)
                 try self.startProcess(staged_proc);
         }
@@ -206,8 +247,13 @@ fn stopProcess(self: *ProcessManager, proc: *Process) !void {
 fn startProcess(self: *ProcessManager, proc: *Process) !void {
     const arena = proc.arena.allocator();
     for (proc.instances, 0..) |*inst, i| {
-        try inst.start(&proc.config, arena);
-        try self.updateLivePid(inst, proc, i);
+        if (inst.status == .stopped or inst.status == .exited or inst.status == .fatal) {
+            self.logger.info("starting process {s}[{d}] (current status: {s})", .{ proc.config.name, i, @tagName(inst.status) });
+            try inst.start(&proc.config, arena);
+            try self.updateLivePid(inst, proc, i);
+        } else {
+            self.logger.debug("skipping start of process {s}[{d}] - already in status: {s}", .{ proc.config.name, i, @tagName(inst.status) });
+        }
     }
 }
 
@@ -218,13 +264,19 @@ fn restartProcess(self: *ProcessManager, proc: *Process) !void {
 
 fn updateLivePid(self: *ProcessManager, child: *const Child, proc: *Process, index: usize) !void {
     if (child.pid) |pid| {
-        // Add or update PID tracking
         try self.live_pid.put(self.gpa, pid, .{ .parent = proc, .index = index });
+        self.logger.debug("updated live PID tracking: pid={d} for process {s}[{d}]", .{ pid, proc.config.name, index });
+    } else {
+        self.logger.warn("attempted to update live PID tracking but child has no PID for process {s}[{d}]", .{ proc.config.name, index });
     }
 }
 
 fn removeLivePid(self: *ProcessManager, pid: posix.pid_t) void {
-    _ = self.live_pid.swapRemove(pid);
+    if (self.live_pid.swapRemove(pid)) {
+        self.logger.debug("removed PID {d} from live tracking", .{pid});
+    } else {
+        self.logger.warn("attempted to remove PID {d} but it was not being tracked", .{pid});
+    }
 }
 
 fn manageProcess(self: *ProcessManager, proc: *Process) !void {
@@ -232,37 +284,72 @@ fn manageProcess(self: *ProcessManager, proc: *Process) !void {
 
     for (proc.instances, 0..) |*child, i| {
         if (child.pid) |pid| {
-            if (try child.poll()) |_| {
+            if (child.poll()) |result| {
+                if (result != null) {
+                    self.removeLivePid(pid);
+                    self.logger.info("detected exit of process {s}[{d}] pid={d}", .{ proc.config.name, i, pid });
+                }
+            } else |err| {
+                self.logger.err("failed to poll process {s}[{d}] pid={d}: {}", .{ proc.config.name, i, pid, err });
+
+                child.finalizeExit(null, null);
                 self.removeLivePid(pid);
             }
+        } else if (child.status == .running) {
+            self.logger.warn("process {s}[{d}] has status=running but no PID, marking as exited", .{ proc.config.name, i });
+            child.status = .exited;
         }
 
         switch (child.status) {
             .starting => {
                 if ((now - child.last_start_time) >= (proc.config.conf.starttime * 1000)) {
-                    child.status = .running;
+                    if (child.pid) |pid| {
+                        if (child.status != .starting) {
+                            continue;
+                        }
+
+                        if (posix.kill(pid, 0)) |_| {
+                            child.status = .running;
+                            child.retries = 0; // Reset retries on successful start
+                            try self.updateLivePid(child, proc, i);
+                            self.logger.info("process {s}[{d}] marked as successfully started (retries reset)", .{ proc.config.name, i });
+                        } else |err| switch (err) {
+                            error.ProcessNotFound => {
+                                child.status = .exited;
+                                self.removeLivePid(pid);
+                                self.logger.warn("process {s}[{d}] died during startup period", .{ proc.config.name, i });
+                            },
+                            else => {
+                                self.logger.debug("could not verify process {s}[{d}] status: {}", .{ proc.config.name, i, err });
+                            },
+                        }
+                    } else {
+                        child.status = .fatal;
+                        self.logger.err("process {s}[{d}] has no PID after startup period", .{ proc.config.name, i });
+                    }
                 }
             },
             .backoff => {
-                // Handle backoff expiration
                 if (child.backoff_until) |until| {
                     if (now >= until) {
-                        // Backoff expired, decide next action based on restart policy
                         const should_restart = switch (proc.config.conf.autorestart) {
                             .always => true,
                             .unexpected => if (child.exit_code) |code| !proc.isExpectedExitCode(code) else true,
                             .never => false,
                         };
 
-                        if (should_restart and child.retries < proc.config.conf.startretries) {
-                            // Try restarting again
-                            child.backoff_until = null;
+                        child.backoff_until = null;
+
+                        if (!should_restart) {
+                            child.status = .stopped;
+                            self.logger.info("process {s}[{d}] stopped after backoff (no restart needed)", .{ proc.config.name, i });
+                        } else if (child.retries < proc.config.conf.startretries) {
+                            self.logger.info("process {s}[{d}] retrying after backoff ({d}/{d})", .{ proc.config.name, i, child.retries + 1, proc.config.conf.startretries });
                             try child.restart(&proc.config, proc.arena.allocator());
                             try self.updateLivePid(child, proc, i);
                         } else {
-                            // No more restarts, mark as stopped or fatal
-                            child.status = if (should_restart) .fatal else .stopped;
-                            child.backoff_until = null;
+                            child.status = .fatal;
+                            self.logger.err("process {s}[{d}] exceeded retry limit after backoff", .{ proc.config.name, i });
                         }
                     }
                 }
@@ -274,37 +361,42 @@ fn manageProcess(self: *ProcessManager, proc: *Process) !void {
                     .never => false,
                 };
 
-                if (should_restart and child.retries < proc.config.conf.startretries) {
-                    // Use consistent restart logic through child.restart()
-                    try child.restart(&proc.config, proc.arena.allocator());
-                    try self.updateLivePid(child, proc, i);
-                } else if (!should_restart) {
+                if (!should_restart) {
+                    // Process exited expectedly, don't restart
                     child.status = .stopped;
+                    self.logger.info("process {s}[{d}] stopped (expected exit)", .{ proc.config.name, i });
                 } else {
-                    child.status = .fatal;
+                    // Process should restart - check if we haven't exceeded retry limit
+                    // Note: restart() will increment retries only if it was a failed start
+                    const was_successful_start = (now - child.last_start_time) >= (proc.config.conf.starttime * 1000);
+
+                    if (was_successful_start) {
+                        // Process ran successfully, reset retry counter before restarting
+                        child.retries = 0;
+                        self.logger.info("process {s}[{d}] exited after successful run, restarting (retries reset)", .{ proc.config.name, i });
+                        try child.restart(&proc.config, proc.arena.allocator());
+                        try self.updateLivePid(child, proc, i);
+                    } else if (child.retries < proc.config.conf.startretries) {
+                        // Failed start but still have retries left
+                        self.logger.info("process {s}[{d}] failed to start, retrying ({d}/{d})", .{ proc.config.name, i, child.retries + 1, proc.config.conf.startretries });
+                        try child.restart(&proc.config, proc.arena.allocator());
+                        try self.updateLivePid(child, proc, i);
+                    } else {
+                        // Exceeded retry limit
+                        child.status = .fatal;
+                        self.logger.err("process {s}[{d}] entered fatal state after {d} failed start attempts", .{ proc.config.name, i, child.retries });
+                    }
                 }
             },
-            .running => {
-                // Running state is stable, nothing to do here
-                // Transitions out of .running are handled by polling (-> .exited)
-                // or by external commands (-> .stopping)
-            },
-            .stopping => {
-                // Stopping state should transition to .exited when process actually exits
-                // This is handled by polling above, but we can add a timeout check
-                // if the process doesn't respond to signals within reasonable time
-            },
-            .stopped => {
-                // Stopped is a terminal state unless manually restarted
-            },
-            .fatal => {
-                // Fatal is a terminal state
-            },
+            .running => {},
+            .stopping => {},
+            .stopped => {},
+            .fatal => {},
         }
     }
 }
 
-fn applyLiveConfig(self: *ProcessManager) !void {
+fn monitorProcesses(self: *ProcessManager) !void {
     var it = self.live.iterator();
     while (it.next()) |entry| {
         try self.manageProcess(entry.value_ptr.*);
@@ -317,7 +409,12 @@ fn mainLoop(self: *ProcessManager) !void {
     var current_parsed_result: Config.ParsedResult = .empty;
     defer current_parsed_result.deinit();
     var new_config_staging: HashMap(*Process) = .empty;
-    errdefer self.cleanupStagedConfig(&new_config_staging);
+    var staging_initialized: bool = false;
+    errdefer {
+        if (staging_initialized) {
+            self.cleanupStagedConfig(&new_config_staging);
+        }
+    }
     var local_command: common.Command = undefined;
     var local_command_payload: [256]u8 = undefined;
 
@@ -365,6 +462,7 @@ fn mainLoop(self: *ProcessManager) !void {
             if (self.stageNewConfig(&current_parsed_result)) |new_config| {
                 logger.info("staged new config successfully ({} processes)", .{new_config.count()});
                 new_config_staging = new_config;
+                staging_initialized = true;
                 continue :state .process_manager_needs_to_commit_the_new_config;
             } else |err| {
                 logger.err("staging config failed: {}", .{err});
@@ -380,6 +478,7 @@ fn mainLoop(self: *ProcessManager) !void {
             if (self.commitStagedConfig(&new_config_staging)) |new_live| {
                 logger.info("committed new config ({} live processes)", .{new_live.count()});
                 self.live = new_live;
+                staging_initialized = false;
                 continue :state .process_manager_needs_to_apply_the_new_config;
             } else |err| {
                 logger.err("commit config failed: {}", .{err});
@@ -389,16 +488,25 @@ fn mainLoop(self: *ProcessManager) !void {
         },
 
         .process_manager_needs_to_apply_the_new_config => {
-            logger.debug("state=APPLY_NEW_CONFIG", .{});
             if (self.stopping.load(.acquire)) continue :state .process_manager_needs_to_shutdown;
 
-            if (self.applyLiveConfig()) {
-                logger.debug("applied live config successfully", .{});
-                continue :state .process_manager_needs_to_check_for_new_command;
+            if (self.monitorProcesses()) {
+                continue :state .process_manager_needs_to_monitor_processes;
             } else |err| {
                 logger.err("apply config failed: {}", .{err});
                 fatal_error = err;
                 continue :state .process_manager_failed_to_apply_config;
+            }
+        },
+
+        .process_manager_needs_to_monitor_processes => {
+            if (self.stopping.load(.acquire)) continue :state .process_manager_needs_to_shutdown;
+
+            if (self.monitorProcesses()) {
+                continue :state .process_manager_needs_to_check_for_new_command;
+            } else |err| {
+                fatal_error = err;
+                continue :state .process_manager_encountered_fatal_error;
             }
         },
 
@@ -408,8 +516,8 @@ fn mainLoop(self: *ProcessManager) !void {
                 logger.info("state=PM_NEEDS_TO_WAIT_FOR_COMMANDS ", .{});
                 continue :state .process_manager_needs_to_route_the_new_command;
             } else {
-                Thread.sleep(std.time.ns_per_ms);
-                continue :state .process_manager_needs_to_check_for_new_command;
+                Thread.sleep(std.time.ns_per_us * 100); // 100 microseconds
+                continue :state .process_manager_needs_to_monitor_processes;
             }
         },
 
@@ -428,10 +536,33 @@ fn mainLoop(self: *ProcessManager) !void {
         },
 
         .process_manager_exec_status => {
-            var it = self.live.iterator();
-            while (it.next()) |entry| {
-                const proc = entry.value_ptr.*;
-                self.printProcessStatus(proc);
+            const name = local_command_payload[0..local_command.payload_len];
+
+            if (name.len == 0) {
+                self.sendResponse(.err, "Error: program name required\n");
+                logger.warn("status command requires program name", .{});
+                continue :state .process_manager_needs_to_check_for_new_command;
+            }
+
+            if (self.live.get(name)) |proc| {
+                var builder = common.ResponseBuilder.init(self.gpa);
+                defer builder.deinit();
+
+                if (self.buildProcessStatus(proc, &builder)) {
+                    const payload = builder.getPayload();
+                    self.sendResponse(.success, payload);
+                    logger.info("sent status for {s}", .{name});
+                } else |err| {
+                    logger.err("failed to build status for {s}: {}", .{ name, err });
+                    self.sendResponse(.err, "Error: failed to build status\n");
+                }
+            } else {
+                var builder = common.ResponseBuilder.init(self.gpa);
+                defer builder.deinit();
+                builder.appendFmt("Error: program '{s}' not found\n", .{name}) catch {};
+                const payload = builder.getPayload();
+                self.sendResponse(.not_found, payload);
+                logger.warn("no process named {s}", .{name});
             }
             continue :state .process_manager_needs_to_check_for_new_command;
         },
@@ -440,13 +571,23 @@ fn mainLoop(self: *ProcessManager) !void {
             const name = local_command_payload[0..local_command.payload_len];
             if (self.live.get(name)) |proc| {
                 if (self.startProcess(proc)) |_| {
+                    var builder = common.ResponseBuilder.init(self.gpa);
+                    defer builder.deinit();
+                    builder.appendFmt("Started process '{s}'\n", .{name}) catch {};
+                    self.sendResponse(.success, builder.getPayload());
                     logger.info("started {s}", .{name});
                 } else |err| {
+                    var builder = common.ResponseBuilder.init(self.gpa);
+                    defer builder.deinit();
+                    builder.appendFmt("Error: failed to start '{s}': {}\n", .{ name, err }) catch {};
+                    self.sendResponse(.err, builder.getPayload());
                     logger.err("failed to start {s}: {}", .{ name, err });
-                    fatal_error = err;
-                    continue :state .process_manager_encountered_fatal_error;
                 }
             } else {
+                var builder = common.ResponseBuilder.init(self.gpa);
+                defer builder.deinit();
+                builder.appendFmt("Error: program '{s}' not found\n", .{name}) catch {};
+                self.sendResponse(.not_found, builder.getPayload());
                 logger.warn("no process named {s}", .{name});
             }
             continue :state .process_manager_needs_to_check_for_new_command;
@@ -456,13 +597,23 @@ fn mainLoop(self: *ProcessManager) !void {
             const name = local_command_payload[0..local_command.payload_len];
             if (self.live.get(name)) |proc| {
                 if (self.stopProcess(proc)) |_| {
+                    var builder = common.ResponseBuilder.init(self.gpa);
+                    defer builder.deinit();
+                    builder.appendFmt("Stopped process '{s}'\n", .{name}) catch {};
+                    self.sendResponse(.success, builder.getPayload());
                     logger.info("stopped {s}", .{name});
                 } else |err| {
+                    var builder = common.ResponseBuilder.init(self.gpa);
+                    defer builder.deinit();
+                    builder.appendFmt("Error: failed to stop '{s}': {}\n", .{ name, err }) catch {};
+                    self.sendResponse(.err, builder.getPayload());
                     logger.err("failed to stop {s}: {}", .{ name, err });
-                    fatal_error = err;
-                    continue :state .process_manager_encountered_fatal_error;
                 }
             } else {
+                var builder = common.ResponseBuilder.init(self.gpa);
+                defer builder.deinit();
+                builder.appendFmt("Error: program '{s}' not found\n", .{name}) catch {};
+                self.sendResponse(.not_found, builder.getPayload());
                 logger.warn("no process named {s}", .{name});
             }
             continue :state .process_manager_needs_to_check_for_new_command;
@@ -472,13 +623,23 @@ fn mainLoop(self: *ProcessManager) !void {
             const name = local_command_payload[0..local_command.payload_len];
             if (self.live.get(name)) |proc| {
                 if (self.restartProcess(proc)) |_| {
+                    var builder = common.ResponseBuilder.init(self.gpa);
+                    defer builder.deinit();
+                    builder.appendFmt("Restarted process '{s}'\n", .{name}) catch {};
+                    self.sendResponse(.success, builder.getPayload());
                     logger.info("restarted {s}", .{name});
                 } else |err| {
+                    var builder = common.ResponseBuilder.init(self.gpa);
+                    defer builder.deinit();
+                    builder.appendFmt("Error: failed to restart '{s}': {}\n", .{ name, err }) catch {};
+                    self.sendResponse(.err, builder.getPayload());
                     logger.err("failed to restart {s}: {}", .{ name, err });
-                    fatal_error = err;
-                    continue :state .process_manager_encountered_fatal_error;
                 }
             } else {
+                var builder = common.ResponseBuilder.init(self.gpa);
+                defer builder.deinit();
+                builder.appendFmt("Error: program '{s}' not found\n", .{name}) catch {};
+                self.sendResponse(.not_found, builder.getPayload());
                 logger.warn("no process named {s}", .{name});
             }
             continue :state .process_manager_needs_to_check_for_new_command;
@@ -486,6 +647,7 @@ fn mainLoop(self: *ProcessManager) !void {
 
         .process_manager_exec_reload => {
             logger.info("reloading config…", .{});
+            self.sendResponse(.success, "Reloading configuration...\n");
             continue :state .process_manager_reset_config_file_seek_position;
         },
 
@@ -501,33 +663,54 @@ fn mainLoop(self: *ProcessManager) !void {
         },
 
         .process_manager_exec_dump => {
+            var builder = common.ResponseBuilder.init(self.gpa);
+            defer builder.deinit();
+
             var it = self.live.iterator();
             while (it.next()) |entry| {
                 const proc = entry.value_ptr.*;
-                self.printProcessStatus(proc);
+                if (self.buildProcessStatus(proc, &builder)) {
+                    // Successfully added to builder
+                } else |err| {
+                    logger.err("failed to build status for {s}: {}", .{ proc.config.name, err });
+                }
+            }
+
+            const payload = builder.getPayload();
+            if (payload.len > 0) {
+                self.sendResponse(.success, payload);
+                logger.info("sent dump for all processes", .{});
+            } else {
+                self.sendResponse(.success, "No processes configured\n");
+                logger.info("no processes to dump", .{});
             }
             continue :state .process_manager_needs_to_check_for_new_command;
         },
 
         .process_manager_exec_quit => {
             logger.info("received quit", .{});
+            self.sendResponse(.success, "Shutting down server...\n");
+            Thread.sleep(std.time.ns_per_ms * 100);
             self.stopping.store(true, .release);
             continue :state .process_manager_needs_to_shutdown;
         },
 
         .process_manager_failed_to_load_config => {
             logger.err("failed to load config: {}", .{fatal_error});
-            continue :state .process_manager_encountered_fatal_error;
+            logger.warn("waiting for valid config - entering monitoring loop with no processes", .{});
+            continue :state .process_manager_needs_to_check_for_new_command;
         },
 
         .process_manager_failed_to_stage_config => {
             logger.err("failed to stage config: {}", .{fatal_error});
-            continue :state .process_manager_encountered_fatal_error;
+            logger.warn("maintaining previous configuration and continuing monitoring", .{});
+            continue :state .process_manager_needs_to_monitor_processes;
         },
 
         .process_manager_failed_to_commit_config => {
             logger.err("failed to commit config: {}", .{fatal_error});
-            continue :state .process_manager_encountered_fatal_error;
+            logger.warn("maintaining previous configuration and continuing monitoring", .{});
+            continue :state .process_manager_needs_to_monitor_processes;
         },
 
         .process_manager_failed_to_apply_config => {
@@ -565,6 +748,7 @@ const Status = enum {
     process_manager_needs_to_commit_the_new_config,
     process_manager_needs_to_load_a_config,
     process_manager_needs_to_load_the_inial_config,
+    process_manager_needs_to_monitor_processes,
     process_manager_needs_to_route_the_new_command,
     process_manager_needs_to_shutdown,
     process_manager_needs_to_stage_the_new_config,
@@ -578,62 +762,73 @@ fn shutdown(self: *ProcessManager) !void {
     }
 }
 
-fn printProcessStatus(self: *ProcessManager, proc: *Process) void {
-    const logger = self.logger;
+fn buildProcessStatus(self: *ProcessManager, proc: *Process, builder: *common.ResponseBuilder) !void {
     const status = proc.currentStatus();
     const status_symbol = switch (status) {
         .running => "●",
         .stopped, .exited => "○",
         .fatal => "✗",
         .backoff => "◐",
+        .starting => "◐",
+        .stopping => "◯",
         else => "◯",
     };
 
     const status_color = switch (status) {
-        .running => "\x1b[32m", // green
-        .stopped, .exited => "\x1b[37m", // white
-        .fatal => "\x1b[31m", // red
-        .backoff => "\x1b[33m", // yellow
-        else => "\x1b[37m", // white
+        .running => "\x1b[32m",
+        .stopped, .exited => "\x1b[37m",
+        .fatal => "\x1b[31m",
+        .backoff, .starting => "\x1b[33m",
+        .stopping => "\x1b[35m",
+        else => "\x1b[37m",
     };
 
     const reset_color = "\x1b[0m";
 
-    // Process name and command line
-    logger.info("{s}{s}{s} {s} - {s}", .{ status_color, status_symbol, reset_color, proc.config.name, proc.config.conf.cmd });
+    try builder.appendFmt("{s}{s}{s} {s} - {s}\n", .{ status_color, status_symbol, reset_color, proc.config.name, proc.config.conf.cmd });
 
-    // Loaded line
-    logger.info("     Loaded: loaded (command: {s}, numprocs: {d})", .{ proc.config.conf.cmd, proc.config.conf.numprocs });
+    try builder.appendFmt("     Loaded: loaded (command: {s}, numprocs: {d})\n", .{ proc.config.conf.cmd, proc.config.conf.numprocs });
 
-    // Active line with status details
     const status_str = switch (status) {
         .running => "active (running)",
         .stopped => "inactive (dead)",
         .exited => "inactive (exited)",
         .fatal => "failed (fatal)",
         .backoff => "activating (backoff)",
+        .starting => "activating (starting)",
+        .stopping => "deactivating (stopping)",
         else => "unknown",
     };
 
-    logger.info("     Active: {s}{s}{s}", .{ status_color, status_str, reset_color });
+    try builder.appendFmt("     Active: {s}{s}{s}\n", .{ status_color, status_str, reset_color });
 
-    // Instance information
     var running_count: usize = 0;
+    var starting_count: usize = 0;
+    var stopping_count: usize = 0;
+    var backoff_count: usize = 0;
+    var fatal_count: usize = 0;
     var main_pid: ?std.posix.pid_t = null;
 
-    for (proc.instances) |*inst| {
-        if (inst.status == .running) {
-            running_count += 1;
-            if (main_pid == null) main_pid = inst.pid;
+    for (proc.instances, 0..) |*inst, i| {
+        self.logger.debug("  Instance[{d}]: status={s}, pid={?d}", .{ i, @tagName(inst.status), inst.pid });
+        switch (inst.status) {
+            .running => {
+                running_count += 1;
+                if (main_pid == null) main_pid = inst.pid;
+            },
+            .starting => starting_count += 1,
+            .stopping => stopping_count += 1,
+            .backoff => backoff_count += 1,
+            .fatal => fatal_count += 1,
+            else => {},
         }
     }
 
     if (main_pid) |pid| {
-        logger.info("   Main PID: {d}", .{pid});
+        try builder.appendFmt("   Main PID: {d}\n", .{pid});
     }
 
-    logger.info("      Tasks: {d} (instances: {d} running/{d} total)", .{ running_count, running_count, proc.instances.len });
+    try builder.appendFmt("      Tasks: {d} running, {d} starting, {d} stopping, {d} backoff, {d} fatal (total: {d})\n", .{ running_count, starting_count, stopping_count, backoff_count, fatal_count, proc.instances.len });
 
-    // Add blank line for readability
-    logger.info("", .{});
+    try builder.append("\n");
 }

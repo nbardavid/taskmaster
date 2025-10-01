@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(zig build)",
+      "Bash(timeout:*)",
+      "Bash(chmod:*)",
+      "Bash(pkill:*)",
+      "Bash(zig build:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

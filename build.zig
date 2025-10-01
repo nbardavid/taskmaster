@@ -20,7 +20,6 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "anyline", .module = anyline },
             },
         }),
-        .linkage = .static,
     });
     b.installArtifact(common);
 
@@ -70,7 +69,6 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "common", .module = common.root_module },
             },
         }),
-        .linkage = .static,
     });
     b.installArtifact(client);
 
@@ -78,7 +76,6 @@ pub fn build(b: *std.Build) void {
 
     run_client_cmd.step.dependOn(b.getInstallStep());
 
-    run_client_cmd.addFileArg(b.path("config.json"));
     if (b.args) |args| {
         run_client_cmd.addArgs(args);
     }
@@ -98,4 +95,33 @@ pub fn build(b: *std.Build) void {
     const check_step = b.step("check", "zls helper");
     check_step.dependOn(&server.step);
     check_step.dependOn(&client.step);
+
+    // Test programs for evaluation
+    const test_programs = [_][]const u8{
+        "simple_success",
+        "simple_failure",
+        "long_runner",
+        "crash_immediately",
+        "startup_slow",
+        "code_selector",
+        "env_printer",
+        "workdir_printer",
+        "stdout_spammer",
+        "signal_catcher",
+    };
+
+    const test_programs_step = b.step("test-programs", "Build all test programs");
+
+    inline for (test_programs) |prog_name| {
+        const prog = b.addExecutable(.{
+            .name = prog_name,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/programs/" ++ prog_name ++ ".zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        b.installArtifact(prog);
+        test_programs_step.dependOn(&prog.step);
+    }
 }

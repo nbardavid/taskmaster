@@ -22,36 +22,36 @@ pub const warn =
 ;
 
 pub fn main() !void {
-    var gpa_instance = heap.GeneralPurposeAllocator(.{
-        .stack_trace_frames = 32,
-        .safety = true,
-        .thread_safe = true,
-        .never_unmap = true,
-        .retain_metadata = true,
-        .verbose_log = true,
-        .resize_stack_traces = true,
-    }){};
+    // var gpa_instance = heap.GeneralPurposeAllocator(.{
+    //     .stack_trace_frames = 32,
+    //     .safety = true,
+    //     .thread_safe = true,
+    //     .never_unmap = true,
+    //     .retain_metadata = true,
+    //     .verbose_log = true,
+    //     .resize_stack_traces = true,
+    // }){};
+    var gpa_instance = heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_instance.deinit();
     const gpa = gpa_instance.allocator();
 
-    std.debug.print("{s}\n", .{warn});
+    const log_file_path = "./taskmaster.log";
+    var logger = Logger.init(gpa, log_file_path);
+    defer logger.deinit();
+
+    logger.start() catch |err| {
+        log.err("fatal error {}", .{err});
+        return;
+    };
 
     var argv = proc.argsAlloc(gpa) catch |err| {
-        log.err("Fatal error encountered {}", .{err});
+        logger.err("Fatal error encountered {}", .{err});
         return;
     };
     defer proc.argsFree(gpa, argv);
 
     const config_file_path = if (argv.len == 2) argv[1][0..] else "config.json";
     const socket_file_path = if (argv.len == 3) argv[2][0..] else "/tmp/taskmaster.server.sock";
-    const log_file_path = "./taskmaster.log";
-
-    var logger = Logger.init(gpa, log_file_path);
-    defer logger.deinit();
-
-    logger.start() catch |err| {
-        return err;
-    };
 
     var server = Server.init(gpa, &logger);
     server.start(socket_file_path, config_file_path) catch |err| {

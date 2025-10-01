@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//home/pollivie/workspace/rncp-project/taskmaster/**)",
+      "Bash(zig build)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
