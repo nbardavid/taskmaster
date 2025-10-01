@@ -6,28 +6,17 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
-	"github.com/nbardavid/taskmaster/internals/ui"
+
 	"github.com/chzyer/readline"
+	"github.com/nbardavid/taskmaster/internals/command"
+	"github.com/nbardavid/taskmaster/internals/ui"
 )
 
 const socketPath = "/tmp/taskmaster.server.sock"
 type StateFunc func(*Context) StateFunc
 var sigs chan os.Signal
-
-type CommandCode int8
-
-const (
-	status CommandCode = iota
-	start
-	restart
-	stop
-	realod
-	quit
-	dump
-)
 
 type Queue struct {
 	value 	[]string
@@ -39,60 +28,15 @@ type Connection struct {
 	err error
 }
 
-type CommandState struct {
-	code CommandCode
-	input string
-	payload string
-	err error
-}
-
 //TODO: change any
 
 type Context struct {
 	connection Connection
 	UI ui.Manager
-	Command CommandState
+	Command command.State
 	pending Queue
 }
 
-func ParseInput (ctx *Context) (CommandState, error) {
-	var cmd CommandState
-	parts := strings.Fields(ctx.Command.input)
-	if len(parts) == 0 {
-		return CommandState{}, fmt.Errorf("empty input")
-	}
-
-	commandPart := parts[0]
-	var payload string
-	if len(parts) > 1 {
-		payload = parts[1]
-	}
-	switch commandPart {
-	case "status":
-		cmd.code=status
-	case "start":
-		cmd.code=start
-	case "restart":
-		cmd.code=restart
-	case "stop":
-		cmd.code=stop
-	case "realod":
-		cmd.code=realod
-	case "quit":
-		cmd.code=quit
-	case "dump":
-		cmd.code=dump
-	default:
-		ui.SetPromptColor(ctx.UI, ui.Yellow)
-		return CommandState{}, fmt.Errorf("unknown command: %q", commandPart)
-	}
-	if payload != "" {
-		cmd.payload = payload
-	} else {
-		cmd.payload = ""
-	}
-	return cmd, nil
-}
 
 func ExitingProperly (ctx *Context) StateFunc {
 	ctx.connection.conn.Close()
@@ -103,19 +47,19 @@ func ExitingProperly (ctx *Context) StateFunc {
 }
 
 func SendCommandAndPayload (ctx *Context) StateFunc {
-	if len(ctx.Command.payload) > 255 {
+	if len(ctx.Command.Payload) > 255 {
 		return SendToLongPayload
 	}
-	_, ctx.connection.err = ctx.connection.conn.Write([]byte{byte(ctx.Command.code), byte(len(ctx.Command.payload))})
+	_, ctx.connection.err = ctx.connection.conn.Write([]byte{byte(ctx.Command.Code), byte(len(ctx.Command.Payload))})
 	if ctx.connection.err != nil {
 		return NeedsToDisconnect
 	}
-	_, ctx.connection.err = ctx.connection.conn.Write([]byte(ctx.Command.payload))
+	_, ctx.connection.err = ctx.connection.conn.Write([]byte(ctx.Command.Payload))
 	return FetchInputs
 }
 
 func SendSimpleCommand (ctx *Context) StateFunc{
-	_, ctx.connection.err = ctx.connection.conn.Write([]byte{byte(ctx.Command.code), 0})
+	_, ctx.connection.err = ctx.connection.conn.Write([]byte{byte(ctx.Command.Code), 0})
 	if ctx.connection.err != nil {
 		return NeedsToDisconnect
 	}
@@ -123,15 +67,15 @@ func SendSimpleCommand (ctx *Context) StateFunc{
 }
 
 func RouteCommand (ctx *Context) StateFunc {
-	if ctx.Command.payload != "" {
+	if ctx.Command.Payload != "" {
 		return SendCommandAndPayload
 	}
 	return SendSimpleCommand
 }
 
 func ParseInputs (ctx *Context) StateFunc {
-	ctx.Command, ctx.Command.err = ParseInput(ctx)
-	if ctx.Command.err != nil {
+	ctx.Command, ctx.Command.Err = command.ParseInput(&ctx.Command, &ctx.UI)
+	if ctx.Command.Err != nil {
 		return ReceivedInvalidCommand
 	}
 	return RouteCommand
@@ -143,8 +87,8 @@ func FetchInputs (ctx *Context) StateFunc {
 		print(ctx.pending.value[ctx.pending.head])
 		ctx.pending.head++
 	}
-	ctx.Command.input, ctx.Command.err = ctx.UI.Rl.Readline()
-	switch ctx.Command.err {
+	ctx.Command.Input, ctx.Command.Err = ctx.UI.Rl.Readline()
+	switch ctx.Command.Err {
 	case io.EOF:
 		return ExitingProperly
 	case readline.ErrInterrupt:

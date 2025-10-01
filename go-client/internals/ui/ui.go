@@ -12,8 +12,6 @@ const (
 	Yellow
 )
 
-type setPromptColor func (Color)
-
 type Manager struct {
 	Rl *readline.Instance
 	Err error
