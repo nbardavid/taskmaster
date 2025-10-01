@@ -26,11 +26,19 @@ payload: [256]u8 = undefined,
 thread: ?Thread = null,
 logger: *Logger,
 
-pub fn init(unix_socket_path: []const u8, bell: *std.atomic.Value(bool), logger: *Logger) Mailbox {
+client_mutex: Thread.Mutex = .{},
+response_pending: std.atomic.Value(bool) = .{ .raw = false },
+response: common.Response = undefined,
+response_payload: []u8 = undefined,
+response_payload_owned: bool = false,
+gpa: mem.Allocator,
+
+pub fn init(unix_socket_path: []const u8, bell: *std.atomic.Value(bool), logger: *Logger, gpa: mem.Allocator) Mailbox {
     return .{
         .unix_socket_path = unix_socket_path,
         .bell = bell,
         .logger = logger,
+        .gpa = gpa,
     };
 }
 
@@ -40,10 +48,41 @@ pub fn deinit(self: *Mailbox) void {
         t.join();
         self.thread = null;
     }
+
+    if (self.response_payload_owned and self.response_payload.len > 0) {
+        self.gpa.free(self.response_payload);
+    }
 }
 
 pub fn start(self: *Mailbox) !void {
     self.thread = try Thread.spawn(.{}, Mailbox.mainLoop, .{self});
+}
+
+pub fn sendResponse(self: *Mailbox, response: common.Response, payload: []const u8) void {
+    self.client_mutex.lock();
+    defer self.client_mutex.unlock();
+
+    if (self.response_payload_owned and self.response_payload.len > 0) {
+        self.gpa.free(self.response_payload);
+        self.response_payload_owned = false;
+    }
+
+    if (payload.len > 0) {
+        const payload_copy = self.gpa.alloc(u8, payload.len) catch {
+            self.logger.err("failed to allocate response payload buffer", .{});
+            return;
+        };
+        @memcpy(payload_copy, payload);
+        self.response_payload = payload_copy;
+        self.response_payload_owned = true;
+    } else {
+        self.response_payload = &[_]u8{};
+        self.response_payload_owned = false;
+    }
+
+    self.response = response;
+    self.response_pending.store(true, .release);
+    self.logger.debug("response queued: status={s} len={d}", .{ @tagName(response.status), response.payload_len });
 }
 
 fn mainLoop(self: *Mailbox) !void {
@@ -123,7 +162,6 @@ fn mainLoop(self: *Mailbox) !void {
         .mailbox_wait_for_client_to_connect => {
             const stop = self.stopping.load(.acquire);
             const srv_null = self.server == null;
-            // logger.debug("state=MAILBOX_WAIT_FOR_CLIENT stop={} srv_null={}", .{ stop, srv_null });
 
             if (stop or srv_null) {
                 if (stop) logger.warn("WAIT -> SHUTDOWN (stopping=true)", .{});
@@ -139,7 +177,6 @@ fn mainLoop(self: *Mailbox) !void {
                 fatal_error = err;
                 continue :state .mailbox_encountered_fatal_error;
             };
-            // logger.debug("poll(server_fd={d}) -> rc={} revents=0x{x}", .{ fd, rc, fds[0].revents });
 
             if (rc == 0) {
                 continue :state .mailbox_wait_for_client_to_connect;
@@ -178,9 +215,6 @@ fn mainLoop(self: *Mailbox) !void {
         },
 
         .mailbox_needs_to_peek_client_command => {
-            // // logger.debug("state=MAILBOX_PEEK_CLIENT_COMMAND stop={} cli_fd={}", .{
-            //     self.stopping.load(.acquire), self.client.?.stream.handle,
-            // });
             if (self.stopping.load(.acquire)) continue :state .mailbox_needs_to_shutdown;
 
             var fds = [_]posix.pollfd{
@@ -234,27 +268,97 @@ fn mainLoop(self: *Mailbox) !void {
             };
 
             switch (self.command.cmd) {
-                .dump, .quit, .status, .reload => {
+                .dump, .quit, .reload => {
                     logger.info("client command: {any}", .{self.command.cmd});
                     continue :state .mailbox_needs_to_send_a_notification;
                 },
-                .start, .restart, .stop => {
+                .status, .start, .restart, .stop => {
                     logger.info("client command: {any} (payload {d} bytes)", .{ self.command.cmd, self.command.payload_len });
-                    reader.readSliceAll(self.payload[0..self.command.payload_len]) catch |err| {
-                        logger.warn("failed to read client payload: {}", .{err});
-                        client_error = err;
-                        continue :state .mailbox_encountered_read_error;
-                    };
+                    if (self.command.payload_len > 0) {
+                        reader.readSliceAll(self.payload[0..self.command.payload_len]) catch |err| {
+                            logger.warn("failed to read client payload: {}", .{err});
+                            client_error = err;
+                            continue :state .mailbox_encountered_read_error;
+                        };
+                    }
                     continue :state .mailbox_needs_to_send_a_notification;
                 },
             }
         },
 
         .mailbox_needs_to_send_a_notification => {
-            // logger.debug("state=MAILBOX_SEND_NOTIFICATION", .{});
             self.bell.store(true, .release);
             logger.info("bell triggered due to client command", .{});
-            continue :state .mailbox_needs_to_peek_client_command;
+            continue :state .mailbox_check_for_response;
+        },
+
+        .mailbox_check_for_response => {
+            if (self.stopping.load(.acquire)) continue :state .mailbox_needs_to_shutdown;
+
+            if (self.response_pending.load(.acquire)) {
+                continue :state .mailbox_send_response;
+            } else {
+                Thread.sleep(std.time.ns_per_us * 100);
+                continue :state .mailbox_check_for_response;
+            }
+        },
+
+        .mailbox_send_response => {
+            logger.info("state=MAILBOX_SEND_RESPONSE", .{});
+            if (self.stopping.load(.acquire)) continue :state .mailbox_needs_to_shutdown;
+
+            self.client_mutex.lock();
+            const response = self.response;
+            const payload = self.response_payload;
+            const owned = self.response_payload_owned;
+            self.response_pending.store(false, .monotonic);
+            self.client_mutex.unlock();
+
+            defer {
+                if (owned and payload.len > 0) {
+                    self.client_mutex.lock();
+                    if (self.response_payload_owned and self.response_payload.ptr == payload.ptr) {
+                        self.gpa.free(self.response_payload);
+                        self.response_payload_owned = false;
+                        self.response_payload = &[_]u8{};
+                    }
+                    self.client_mutex.unlock();
+                }
+            }
+
+            if (self.client) |*c| {
+                var write_buffer: [4096]u8 = undefined;
+                var writer = c.stream.writer(&write_buffer);
+                const w = &writer.interface;
+
+                if (w.writeStruct(response, builtin.cpu.arch.endian())) {
+                    logger.debug("sent response header: status={s} len={d}", .{ @tagName(response.status), response.payload_len });
+
+                    if (response.payload_len > 0 and payload.len > 0) {
+                        const to_write = @min(payload.len, response.payload_len);
+                        if (w.writeAll(payload[0..to_write])) {
+                            logger.debug("sent response payload: {d} bytes", .{to_write});
+                        } else |err| {
+                            logger.err("failed to write response payload: {}", .{err});
+                            continue :state .mailbox_needs_to_disconnect_client;
+                        }
+                    }
+
+                    if (w.flush()) {
+                        logger.info("response sent successfully", .{});
+                        continue :state .mailbox_needs_to_peek_client_command;
+                    } else |err| {
+                        logger.err("failed to flush response: {}", .{err});
+                        continue :state .mailbox_needs_to_disconnect_client;
+                    }
+                } else |err| {
+                    logger.err("failed to write response header: {}", .{err});
+                    continue :state .mailbox_needs_to_disconnect_client;
+                }
+            } else {
+                logger.warn("no client connection to send response to", .{});
+                continue :state .mailbox_wait_for_client_to_connect;
+            }
         },
 
         .mailbox_encountered_read_error => {
@@ -313,4 +417,6 @@ const State = enum {
     mailbox_needs_to_send_a_notification,
     mailbox_needs_to_shutdown,
     mailbox_wait_for_client_to_connect,
+    mailbox_check_for_response,
+    mailbox_send_response,
 };

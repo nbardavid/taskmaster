@@ -177,8 +177,9 @@ pub fn stop(self: *Child, sig: i32, timeout_ms: usize) !void {
                 self.finalizeExit(exit.code, exit.signal);
                 return;
             }
+            // TODO improve the logic and remove the sleep on procesManager thread
             if ((time.milliTimestamp() - t0) > timeout_ms) break;
-            std.Thread.sleep(50 * time.ns_per_ms);
+            std.Thread.sleep(1 * time.ns_per_ms);
         }
 
         _ = posix.kill(-pid, posix.SIG.KILL) catch |err| switch (err) {
@@ -197,8 +198,9 @@ pub fn stop(self: *Child, sig: i32, timeout_ms: usize) !void {
                 self.finalizeExit(exit.code, exit.signal);
                 return;
             }
+            // TODO improve the logic and remove the sleep on procesManager thread
             if (time.milliTimestamp() > kill_deadline) break;
-            std.Thread.sleep(20 * time.ns_per_ms);
+            std.Thread.sleep(1 * time.ns_per_ms);
         }
     }
 
@@ -227,13 +229,21 @@ pub fn poll(self: *Child) !?void {
 
 pub fn restart(self: *Child, cfg: *const Process.Config, arena: std.mem.Allocator) !void {
     const now = time.milliTimestamp();
-    self.retries += 1;
 
-    if (self.retries >= cfg.conf.startretries and (@as(u64, @intCast(now)) - self.last_start_time) < (cfg.conf.starttime * 1000)) {
+    // Check if the previous start attempt failed (didn't survive starttime)
+    const failed_start = (@as(u64, @intCast(now)) - self.last_start_time) < (cfg.conf.starttime * 1000);
+
+    // Only increment retries if the process failed to start properly
+    if (failed_start) {
+        self.retries += 1;
+    }
+
+    // If we've exceeded retry limit for failed starts, enter backoff
+    if (failed_start and self.retries >= cfg.conf.startretries) {
         self.status = .backoff;
-
         const backoff_time = @max(cfg.conf.starttime * 2 * 1000, 5000);
         self.backoff_until = @as(u64, @intCast(now)) + backoff_time;
+        self.logger.warn("child entered backoff after {d} failed start attempts", .{self.retries});
         return;
     }
 

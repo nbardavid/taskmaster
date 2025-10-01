@@ -15,7 +15,7 @@ const Command = common.Command;
 
 const max_try_conn = 10;
 const task_master_usage =
-    \\./taskmaster_client <config.json>;
+    \\./taskmaster_client ;
 ;
 
 const State = enum {
@@ -34,6 +34,10 @@ const State = enum {
     client_encountered_write_error,
     client_needs_to_disconnect,
     client_resend_pending,
+    client_wait_for_response,
+    client_read_response_header,
+    client_read_response_payload,
+    client_display_response,
 };
 
 pub fn main() !void {
@@ -52,6 +56,10 @@ pub fn main() !void {
 
     const server_path = "/tmp/taskmaster.server.sock";
 
+    if (argv.len > 1) {
+        return runOneShot(gpa, server_path, argv[1..]);
+    }
+
     var shell: Shell = .init(gpa, &stdout_writer.interface);
     defer shell.deinit();
     shell.enableHistory();
@@ -65,10 +73,13 @@ pub fn main() !void {
     var server_stream: net.Stream = undefined;
     var pending_command: ?Command = null;
     var pending_payload: []const u8 = "";
+    var server_read_buffer: [4096]u8 = undefined;
+    var server_reader: net.Stream.Reader = undefined;
+    var server_response: common.Response = undefined;
+    var server_response_payload: []u8 = undefined;
 
     log.info("client started (server path={s})", .{server_path});
 
-    // state machine.
     {
         state: switch (State.client_disconnected_from_server) {
             .client_disconnected_from_server => {
@@ -87,6 +98,7 @@ pub fn main() !void {
             .client_connected_to_server => {
                 log.info("state=CLIENT_CONNECTED", .{});
                 server_writer = server_stream.writer(&server_buffer);
+                server_reader = server_stream.reader(&server_read_buffer);
 
                 if (pending_command) |pcmd| {
                     log.info("have pending command {any}, resending", .{pcmd.cmd});
@@ -189,13 +201,75 @@ pub fn main() !void {
                 const writer = &server_writer.interface;
                 if (writer.flush()) {
                     log.info("command flush succeeded", .{});
-                    continue :state .client_fetch_inputs;
+                    continue :state .client_wait_for_response;
                 } else |err| {
                     pending_command = client_command;
                     pending_payload = client_command_payload;
                     log.warn("failed to flush command: {}", .{err});
                     continue :state .client_needs_to_disconnect;
                 }
+            },
+
+            .client_wait_for_response => {
+                log.debug("state=CLIENT_WAIT_FOR_RESPONSE", .{});
+                continue :state .client_read_response_header;
+            },
+
+            .client_read_response_header => {
+                log.debug("state=CLIENT_READ_RESPONSE_HEADER", .{});
+                const reader = server_reader.interface();
+                if (reader.peekStruct(common.Response, builtin.cpu.arch.endian())) |response| {
+                    log.info("received response: status={s} payload_len={d}", .{ @tagName(response.status), response.payload_len });
+                    server_response = response;
+                    _ = reader.discard(.limited(@sizeOf(common.Response))) catch |err| {
+                        log.err("failed to discard response header: {}", .{err});
+                        continue :state .client_needs_to_disconnect;
+                    };
+                    if (response.payload_len > 0) {
+                        continue :state .client_read_response_payload;
+                    } else {
+                        server_response_payload = &[_]u8{};
+                        continue :state .client_display_response;
+                    }
+                } else |err| {
+                    log.err("failed to read response header: {}", .{err});
+                    continue :state .client_needs_to_disconnect;
+                }
+            },
+
+            .client_read_response_payload => {
+                log.debug("state=CLIENT_READ_RESPONSE_PAYLOAD", .{});
+                const reader = server_reader.interface();
+                const payload_len = server_response.payload_len;
+
+                const payload_buffer = gpa.alloc(u8, payload_len) catch |err| {
+                    log.err("failed to allocate payload buffer: {}", .{err});
+                    continue :state .client_needs_to_disconnect;
+                };
+
+                if (reader.readSliceAll(payload_buffer)) |_| {
+                    log.debug("received response payload: {d} bytes", .{payload_len});
+                    server_response_payload = payload_buffer;
+                    continue :state .client_display_response;
+                } else |err| {
+                    log.err("failed to read response payload: {}", .{err});
+                    gpa.free(payload_buffer);
+                    continue :state .client_needs_to_disconnect;
+                }
+            },
+
+            .client_display_response => {
+                log.debug("state=CLIENT_DISPLAY_RESPONSE", .{});
+                const out = fs.File.stdout();
+                out.writeAll(server_response_payload) catch |err| {
+                    log.warn("failed to write response to stdout: {}", .{err});
+                };
+
+                if (server_response_payload.len > 0) {
+                    gpa.free(server_response_payload);
+                }
+
+                continue :state .client_fetch_inputs;
             },
 
             .client_needs_to_disconnect => {
@@ -250,9 +324,7 @@ fn parseCommand(cmd: []const u8, payload: []const u8) !Command {
         else
             return error.InvalidCommand;
 
-    if (mem.eql(u8, "status", first_token)) {
-        return .{ .cmd = .status, .payload_len = 0 };
-    } else if (mem.eql(u8, "reload", first_token)) {
+    if (mem.eql(u8, "reload", first_token)) {
         return .{ .cmd = .reload, .payload_len = 0 };
     } else if (mem.eql(u8, "dump", first_token)) {
         return .{ .cmd = .dump, .payload_len = 0 };
@@ -266,7 +338,9 @@ fn parseCommand(cmd: []const u8, payload: []const u8) !Command {
         else
             return error.InvalidArgumentLength;
 
-    if (mem.eql(u8, "start", first_token)) {
+    if (mem.eql(u8, "status", first_token)) {
+        return .{ .cmd = .status, .payload_len = argument_len };
+    } else if (mem.eql(u8, "start", first_token)) {
         return .{ .cmd = .start, .payload_len = argument_len };
     } else if (mem.eql(u8, "stop", first_token)) {
         return .{ .cmd = .stop, .payload_len = argument_len };
@@ -275,4 +349,88 @@ fn parseCommand(cmd: []const u8, payload: []const u8) !Command {
     }
 
     return error.InvalidCommand;
+}
+
+fn runOneShot(gpa: mem.Allocator, server_path: []const u8, args: []const []const u8) !void {
+    var server_buffer: [1024]u8 = undefined;
+
+    log.info("one-shot mode: connecting to server", .{});
+    const server_stream = connectToServer(server_path, max_try_conn) catch |err| {
+        log.err("failed to connect to server: {}", .{err});
+        return err;
+    };
+    defer server_stream.close();
+
+    const command_str = try mem.join(gpa, " ", args);
+    defer gpa.free(command_str);
+
+    log.info("one-shot mode: executing command: \"{s}\"", .{command_str});
+
+    var it = mem.tokenizeScalar(u8, command_str, ' ');
+    const first_token = it.next() orelse return error.NoCommand;
+    const payload = it.next() orelse "";
+
+    const client_command = parseCommand(first_token, payload) catch |err| {
+        log.err("invalid command: \"{s}\" ({})", .{ first_token, err });
+        return err;
+    };
+
+    log.info("parsed command={any} payload_len={d}", .{
+        client_command.cmd,
+        client_command.payload_len,
+    });
+
+    var server_writer = server_stream.writer(&server_buffer);
+    const writer = &server_writer.interface;
+
+    writer.writeStruct(client_command, builtin.cpu.arch.endian()) catch |err| {
+        log.err("failed to send command: {}", .{err});
+        return err;
+    };
+
+    if (client_command.payload_len != 0) {
+        writer.writeAll(payload) catch |err| {
+            log.err("failed to send payload: {}", .{err});
+            return err;
+        };
+    }
+
+    writer.flush() catch |err| {
+        log.err("failed to flush command: {}", .{err});
+        return err;
+    };
+
+    log.info("one-shot mode: command sent successfully", .{});
+
+    var read_buffer: [4096]u8 = undefined;
+    var server_reader = server_stream.reader(&read_buffer);
+    const reader = server_reader.interface();
+
+    const response = reader.peekStruct(common.Response, builtin.cpu.arch.endian()) catch |err| {
+        log.err("failed to read response: {}", .{err});
+        return err;
+    };
+
+    _ = reader.discard(.limited(@sizeOf(common.Response))) catch |err| {
+        log.err("failed to discard response header: {}", .{err});
+        return err;
+    };
+
+    log.info("received response: status={s} payload_len={d}", .{ @tagName(response.status), response.payload_len });
+
+    if (response.payload_len > 0) {
+        const payload_buffer = try gpa.alloc(u8, response.payload_len);
+        defer gpa.free(payload_buffer);
+
+        reader.readSliceAll(payload_buffer) catch |err| {
+            log.err("failed to read response payload: {}", .{err});
+            return err;
+        };
+
+        const stdout = fs.File.stdout();
+        stdout.writeAll(payload_buffer) catch |err| {
+            log.err("failed to write response to stdout: {}", .{err});
+            return err;
+        };
+    }
 }

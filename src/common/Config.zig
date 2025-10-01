@@ -15,6 +15,7 @@ pub fn open(self: *Config) !void {
 }
 
 pub fn parseLeaky(self: *Config, gpa: mem.Allocator) !ParsedResult {
+    try self.reload();
     var file_content_hasher = std.hash.Wyhash.init(0);
 
     var arena_instance: heap.ArenaAllocator = .init(gpa);

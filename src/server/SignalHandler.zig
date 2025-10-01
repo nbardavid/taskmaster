@@ -138,28 +138,11 @@ pub fn waitForSignal(self: *SignalHandler, timeout_ms: u32) SignalFlags {
             }
         }
 
-        std.time.sleep(1 * std.time.ns_per_ms);
+        std.Thread.yield() catch {};
     }
 }
 
 fn signalHandler(sig: c_int) callconv(.c) void {
-    // Debug: Signal-safe write to stderr
-    if (sig == posix.SIG.INT) {
-        const msg = "[SIGNAL: SIGINT]\n";
-        _ = posix.write(2, msg) catch {};
-    } else if (sig == posix.SIG.TERM) {
-        const msg = "[SIGNAL: SIGTERM]\n";
-        _ = posix.write(2, msg) catch {};
-    } else if (sig == posix.SIG.HUP) {
-        const msg = "[SIGNAL: SIGHUP]\n";
-        _ = posix.write(2, msg) catch {};
-    } else if (sig == posix.SIG.CHLD) {
-        const msg = "[SIGNAL: SIGCHLD]\n";
-        _ = posix.write(2, msg) catch {};
-    } else {
-        const msg = "[SIGNAL: UNKNOWN]\n";
-        _ = posix.write(2, msg) catch {};
-    }
 
     // We can't access the instance directly in a C signal handler,
     // so we use a global variable. This is not ideal but necessary for signal handling.

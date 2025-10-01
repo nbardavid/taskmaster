@@ -29,7 +29,6 @@ fn sendCommand(process_manager: *ProcessManager, cmd: Command, cmd_payload: *[25
     process_manager.cmd = cmd;
     @memcpy(&process_manager.cmd_payload, cmd_payload);
     process_manager.new_cmd.store(true, .release);
-    log.info("server: queued command {any} for process manager", .{cmd.cmd});
 }
 
 pub fn start(self: *Server, unix_sock_path: []const u8, config_file_path: []const u8) !void {
@@ -39,10 +38,11 @@ pub fn start(self: *Server, unix_sock_path: []const u8, config_file_path: []cons
     var process_manager: ProcessManager = .init(self.gpa, config_file_path, logger);
     defer process_manager.deinit();
 
-    var mailbox: Mailbox = .init(unix_sock_path, &self.bell, logger);
+    var mailbox: Mailbox = .init(unix_sock_path, &self.bell, logger, self.gpa);
     defer mailbox.deinit();
 
-    // Setup signal handling
+    process_manager.setMailbox(&mailbox);
+
     SignalHandler.setGlobalHandler(&self.signal_handler);
     defer SignalHandler.clearGlobalHandler();
     defer self.signal_handler.deinit();
@@ -64,13 +64,10 @@ pub fn start(self: *Server, unix_sock_path: []const u8, config_file_path: []cons
         },
 
         .server_needs_to_check_signals => {
-            // Always check for signals first, before any other operations
             const signals = self.signal_handler.checkSignals();
             if (signals.hasAnySignal()) {
-                // Debug: log what signals were detected
-                logger.debug("signals detected - sighup={} sigterm={} sigint={} sigchld={}", .{signals.sighup, signals.sigterm, signals.sigint, signals.sigchld});
+                logger.debug("signals detected - sighup={} sigterm={} sigint={} sigchld={}", .{ signals.sighup, signals.sigterm, signals.sigint, signals.sigchld });
 
-                // Handle signals immediately here instead of in a separate state
                 if (signals.sighup) {
                     logger.info("received SIGHUP - reloading configuration", .{});
                     cmd = Command{ .cmd = .reload, .payload_len = 0 };
@@ -85,7 +82,6 @@ pub fn start(self: *Server, unix_sock_path: []const u8, config_file_path: []cons
 
                 if (signals.sigchld) {
                     logger.debug("received SIGCHLD - child process state changed", .{});
-                    // ProcessManager will handle child process reaping in its monitor loop
                 }
 
                 if (signals.sigusr1) {
@@ -101,10 +97,10 @@ pub fn start(self: *Server, unix_sock_path: []const u8, config_file_path: []cons
                 }
             }
 
-            // If no signals, continue with normal operation - determine next state based on initialization
             if (process_manager.thread == null) {
                 continue :state .server_needs_to_init_process_manager;
             } else {
+                Thread.sleep(std.time.ns_per_us * 50); // 50 microseconds
                 continue :state .server_needs_to_wait_for_command;
             }
         },
@@ -159,9 +155,9 @@ pub fn start(self: *Server, unix_sock_path: []const u8, config_file_path: []cons
 
         .server_needs_to_send_command => {
             sendCommand(&process_manager, cmd, &cmd_payload);
+            Thread.sleep(std.time.ns_per_us * 10); // 10 microseconds
             continue :state .server_needs_to_check_signals;
         },
-
 
         .server_needs_to_stop => {
             logger.info("state=SERVER_STOP", .{});
