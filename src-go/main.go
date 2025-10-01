@@ -8,7 +8,7 @@ func main () {
 	var state = client.DisconnectedFromServer
 	ctx := client.Context{}
 
-	for {
+	for state != nil {
 		state = state(&ctx)
 	}
 }

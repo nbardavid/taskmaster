@@ -1,18 +1,20 @@
 package client
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
-
 	"github.com/chzyer/readline"
 )
 
 const socketPath = "/tmp/taskmaster.server.sock"
 type StateFunc func(*Context) StateFunc
+var sigs chan os.Signal
 
 type CommandCode int8
 
@@ -36,6 +38,7 @@ type Queue struct {
 	head 	int
 }
 
+
 type Context struct {
 	conn net.Conn
 	rl  *readline.Instance 
@@ -43,12 +46,13 @@ type Context struct {
 	input string
 	err error
 	listenerErr error
+	prompt string
 	pending Queue
 }
 
-func ParseInput (input string) (Command, error) {
+func ParseInput (ctx *Context) (Command, error) {
 	var cmd Command
-	parts := strings.Fields(input)
+	parts := strings.Fields(ctx.input)
 	if len(parts) == 0 {
 		return Command{}, fmt.Errorf("empty input")
 	}
@@ -74,6 +78,7 @@ func ParseInput (input string) (Command, error) {
 	case "dump":
 		cmd.code=dump
 	default:
+		ctx.prompt = "\033[33m> \033[0m"
 		return Command{}, fmt.Errorf("unknown command: %q", commandPart)
 	}
 	if payload != "" {
@@ -82,6 +87,14 @@ func ParseInput (input string) (Command, error) {
 		cmd.payload = ""
 	}
 	return cmd, nil
+}
+
+func ExitingProperly (ctx *Context) StateFunc {
+	ctx.conn.Close()
+	ctx.rl.Close()
+	signal.Stop(sigs)
+	fmt.Printf("exit\n")
+	return nil
 }
 
 func SendCommandAndPayload (ctx *Context) StateFunc {
@@ -112,7 +125,7 @@ func RouteCommand (ctx *Context) StateFunc {
 }
 
 func ParseInputs (ctx *Context) StateFunc {
-	ctx.cmd, ctx.err = ParseInput(ctx.input)
+	ctx.cmd, ctx.err = ParseInput(ctx)
 	if ctx.err != nil {
 		return ReceivedInvalidCommand
 	}
@@ -125,60 +138,34 @@ func FetchInputs (ctx *Context) StateFunc {
 		print(ctx.pending.value[ctx.pending.head])
 		ctx.pending.head++
 	}
-
+	ctx.rl.SetPrompt(ctx.prompt)
 	ctx.input, ctx.err = ctx.rl.Readline()
-	if ctx.err != nil {
-		return EncounteredFatalError
+	switch ctx.err {
+	case io.EOF:
+		return ExitingProperly
+	case readline.ErrInterrupt:
+		ctx.prompt = "\033[31m> \033[0m"
+		return FetchInputs
 	}
 	return ParseInputs
 }
 
-//TODO: move
-
-type ResponseStatus uint8
-
-const (
-	success = iota
-	err
-	not_found
-)
-
-type Response struct {
-	status ResponseStatus
-	reserved uint8
-	payload_len uint16
-}
-
-//
-
-func ListenToServer (ctx *Context) {
-	buf := make([]byte, 4)
-
-	for {
-		if _, err := io.ReadFull(ctx.conn, buf); err != nil {
-			ctx.listenerErr = err
-			return
-		}
-		var res = Response{
-			status: ResponseStatus(buf[0]), 
-			reserved: buf[1],
-			payload_len: binary.LittleEndian.Uint16(buf[2:4]),
-		}
-
-		payloadBuf := make([]byte, res.payload_len)
-		if _, err := io.ReadFull(ctx.conn, payloadBuf); err != nil {
-			ctx.listenerErr = err
-			return
-		}
-		ctx.pending.value = append(ctx.pending.value, string(payloadBuf))
-	}
+func IgnoreSigint() {
+    sigs = make(chan os.Signal, 1)
+    signal.Notify(sigs, syscall.SIGINT)
+    go func() {
+        for range sigs {
+        }
+    }()
 }
 
 func ConnectedToServer (ctx *Context) StateFunc {
-	ctx.rl, ctx.err = readline.New("> ")
+	ctx.prompt = "\033[32m>\033[0m "
+	ctx.rl, ctx.err = readline.New(ctx.prompt)
 	if ctx.err != nil {
 		return EncounteredFatalError
 	}
+	IgnoreSigint()
 	go ListenToServer((ctx))
 	return FetchInputs
 }
