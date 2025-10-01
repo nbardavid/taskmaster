@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/nbardavid/taskmaster/client"
+	"github.com/nbardavid/taskmaster/internals/client"
 )
 
 func main () {

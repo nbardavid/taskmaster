@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"github.com/nbardavid/taskmaster/internals/ui"
 	"github.com/chzyer/readline"
 )
 
@@ -28,33 +29,37 @@ const (
 	dump
 )
 
-type Command struct {
-	code CommandCode
-	payload string
-}
-
 type Queue struct {
 	value 	[]string
 	head 	int
 }
 
+type Connection struct {
+	conn net.Conn
+	err error
+}
+
+type CommandState struct {
+	code CommandCode
+	input string
+	payload string
+	err error
+}
+
+//TODO: change any
 
 type Context struct {
-	conn net.Conn
-	rl  *readline.Instance 
-	cmd Command
-	input string
-	err error
-	listenerErr error
-	prompt string
+	connection Connection
+	UI ui.Manager
+	Command CommandState
 	pending Queue
 }
 
-func ParseInput (ctx *Context) (Command, error) {
-	var cmd Command
-	parts := strings.Fields(ctx.input)
+func ParseInput (ctx *Context) (CommandState, error) {
+	var cmd CommandState
+	parts := strings.Fields(ctx.Command.input)
 	if len(parts) == 0 {
-		return Command{}, fmt.Errorf("empty input")
+		return CommandState{}, fmt.Errorf("empty input")
 	}
 
 	commandPart := parts[0]
@@ -78,8 +83,8 @@ func ParseInput (ctx *Context) (Command, error) {
 	case "dump":
 		cmd.code=dump
 	default:
-		ctx.prompt = "\033[33m> \033[0m"
-		return Command{}, fmt.Errorf("unknown command: %q", commandPart)
+		ui.SetPromptColor(ctx.UI, ui.Yellow)
+		return CommandState{}, fmt.Errorf("unknown command: %q", commandPart)
 	}
 	if payload != "" {
 		cmd.payload = payload
@@ -90,43 +95,43 @@ func ParseInput (ctx *Context) (Command, error) {
 }
 
 func ExitingProperly (ctx *Context) StateFunc {
-	ctx.conn.Close()
-	ctx.rl.Close()
+	ctx.connection.conn.Close()
+	ctx.UI.Rl.Close()
 	signal.Stop(sigs)
 	fmt.Printf("exit\n")
 	return nil
 }
 
 func SendCommandAndPayload (ctx *Context) StateFunc {
-	if len(ctx.cmd.payload) > 255 {
+	if len(ctx.Command.payload) > 255 {
 		return SendToLongPayload
 	}
-	_, ctx.err = ctx.conn.Write([]byte{byte(ctx.cmd.code), byte(len(ctx.cmd.payload))})
-	if ctx.err != nil {
+	_, ctx.connection.err = ctx.connection.conn.Write([]byte{byte(ctx.Command.code), byte(len(ctx.Command.payload))})
+	if ctx.connection.err != nil {
 		return NeedsToDisconnect
 	}
-	_, ctx.err = ctx.conn.Write([]byte(ctx.cmd.payload))
+	_, ctx.connection.err = ctx.connection.conn.Write([]byte(ctx.Command.payload))
 	return FetchInputs
 }
 
 func SendSimpleCommand (ctx *Context) StateFunc{
-	_, ctx.err = ctx.conn.Write([]byte{byte(ctx.cmd.code), 0})
-	if ctx.err != nil {
+	_, ctx.connection.err = ctx.connection.conn.Write([]byte{byte(ctx.Command.code), 0})
+	if ctx.connection.err != nil {
 		return NeedsToDisconnect
 	}
 	return FetchInputs
 }
 
 func RouteCommand (ctx *Context) StateFunc {
-	if ctx.cmd.payload != "" {
+	if ctx.Command.payload != "" {
 		return SendCommandAndPayload
 	}
 	return SendSimpleCommand
 }
 
 func ParseInputs (ctx *Context) StateFunc {
-	ctx.cmd, ctx.err = ParseInput(ctx)
-	if ctx.err != nil {
+	ctx.Command, ctx.Command.err = ParseInput(ctx)
+	if ctx.Command.err != nil {
 		return ReceivedInvalidCommand
 	}
 	return RouteCommand
@@ -138,13 +143,12 @@ func FetchInputs (ctx *Context) StateFunc {
 		print(ctx.pending.value[ctx.pending.head])
 		ctx.pending.head++
 	}
-	ctx.rl.SetPrompt(ctx.prompt)
-	ctx.input, ctx.err = ctx.rl.Readline()
-	switch ctx.err {
+	ctx.Command.input, ctx.Command.err = ctx.UI.Rl.Readline()
+	switch ctx.Command.err {
 	case io.EOF:
 		return ExitingProperly
 	case readline.ErrInterrupt:
-		ctx.prompt = "\033[31m> \033[0m"
+		ui.SetPromptColor(ctx.UI, ui.Red)
 		return FetchInputs
 	}
 	return ParseInputs
@@ -160,9 +164,8 @@ func IgnoreSigint() {
 }
 
 func ConnectedToServer (ctx *Context) StateFunc {
-	ctx.prompt = "\033[32m>\033[0m "
-	ctx.rl, ctx.err = readline.New(ctx.prompt)
-	if ctx.err != nil {
+	ctx.UI.Rl, ctx.UI.Err = readline.New("> ")
+	if ctx.UI.Err != nil {
 		return EncounteredFatalError
 	}
 	IgnoreSigint()
@@ -171,10 +174,9 @@ func ConnectedToServer (ctx *Context) StateFunc {
 }
 
 func DisconnectedFromServer (ctx *Context) StateFunc {
-	ctx.conn, ctx.err = net.Dial("unix", socketPath)
-	if ctx.err != nil {
+	ctx.connection.conn, ctx.connection.err = net.Dial("unix", socketPath)
+	if ctx.connection.conn != nil {
 		return EncounteredFatalError
 	} 
 	return ConnectedToServer
 }
-
