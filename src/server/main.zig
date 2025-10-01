@@ -53,6 +53,21 @@ pub fn main() !void {
     const config_file_path = if (argv.len == 2) argv[1][0..] else "config.json";
     const socket_file_path = if (argv.len == 3) argv[2][0..] else "/tmp/taskmaster.server.sock";
 
+    // Check if server is already running by checking socket file existence
+    if (fs.cwd().access(socket_file_path, .{})) {
+        logger.err("Server is already running - socket file exists at: {s}", .{socket_file_path});
+        logger.err("If you're sure no server is running, delete the socket file manually", .{});
+        return error.ServerAlreadyRunning;
+    } else |err| switch (err) {
+        error.FileNotFound => {
+            // Good - socket doesn't exist, we can proceed
+        },
+        else => {
+            logger.err("Failed to check socket file: {}", .{err});
+            return err;
+        },
+    }
+
     var server = Server.init(gpa, &logger);
     server.start(socket_file_path, config_file_path) catch |err| {
         logger.err("Fatal error encountered {}", .{err});

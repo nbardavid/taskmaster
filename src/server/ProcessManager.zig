@@ -313,6 +313,8 @@ fn manageProcess(self: *ProcessManager, proc: *Process) !void {
                             child.retries = 0; // Reset retries on successful start
                             try self.updateLivePid(child, proc, i);
                             self.logger.info("process {s}[{d}] marked as successfully started (retries reset)", .{ proc.config.name, i });
+                            // Log running_confirmed event
+                            child.logEvent(.running_confirmed, pid, null, null);
                         } else |err| switch (err) {
                             error.ProcessNotFound => {
                                 child.status = .exited;
@@ -573,7 +575,15 @@ fn mainLoop(self: *ProcessManager) !void {
                 if (self.startProcess(proc)) |_| {
                     var builder = common.ResponseBuilder.init(self.gpa);
                     defer builder.deinit();
-                    builder.appendFmt("Started process '{s}'\n", .{name}) catch {};
+                    builder.appendFmt("Started process '{s}':\n", .{name}) catch {};
+
+                    // Add PID info for each instance
+                    for (proc.instances, 0..) |*inst, i| {
+                        if (inst.pid) |pid| {
+                            builder.appendFmt("  Instance[{d}]: pid={d}\n", .{ i, pid }) catch {};
+                        }
+                    }
+
                     self.sendResponse(.success, builder.getPayload());
                     logger.info("started {s}", .{name});
                 } else |err| {
@@ -599,7 +609,7 @@ fn mainLoop(self: *ProcessManager) !void {
                 if (self.stopProcess(proc)) |_| {
                     var builder = common.ResponseBuilder.init(self.gpa);
                     defer builder.deinit();
-                    builder.appendFmt("Stopped process '{s}'\n", .{name}) catch {};
+                    builder.appendFmt("Stopped process '{s}' ({d} instance(s))\n", .{ name, proc.instances.len }) catch {};
                     self.sendResponse(.success, builder.getPayload());
                     logger.info("stopped {s}", .{name});
                 } else |err| {
@@ -625,7 +635,15 @@ fn mainLoop(self: *ProcessManager) !void {
                 if (self.restartProcess(proc)) |_| {
                     var builder = common.ResponseBuilder.init(self.gpa);
                     defer builder.deinit();
-                    builder.appendFmt("Restarted process '{s}'\n", .{name}) catch {};
+                    builder.appendFmt("Restarted process '{s}':\n", .{name}) catch {};
+
+                    // Add PID info for each instance
+                    for (proc.instances, 0..) |*inst, i| {
+                        if (inst.pid) |pid| {
+                            builder.appendFmt("  Instance[{d}]: pid={d}\n", .{ i, pid }) catch {};
+                        }
+                    }
+
                     self.sendResponse(.success, builder.getPayload());
                     logger.info("restarted {s}", .{name});
                 } else |err| {
@@ -762,6 +780,46 @@ fn shutdown(self: *ProcessManager) !void {
     }
 }
 
+fn formatDuration(seconds: u64, buffer: []u8) ![]const u8 {
+    if (seconds < 60) {
+        return std.fmt.bufPrint(buffer, "{d}s", .{seconds});
+    } else if (seconds < 3600) {
+        const mins = seconds / 60;
+        const secs = seconds % 60;
+        return std.fmt.bufPrint(buffer, "{d}m {d}s", .{ mins, secs });
+    } else if (seconds < 86400) {
+        const hours = seconds / 3600;
+        const mins = (seconds % 3600) / 60;
+        return std.fmt.bufPrint(buffer, "{d}h {d}m", .{ hours, mins });
+    } else {
+        const days = seconds / 86400;
+        const hours = (seconds % 86400) / 3600;
+        return std.fmt.bufPrint(buffer, "{d}d {d}h", .{ days, hours });
+    }
+}
+
+fn formatTimestamp(timestamp_ms: u64, buffer: []u8) ![]const u8 {
+    const secs = timestamp_ms / 1000;
+    const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = secs };
+    const epoch_day = epoch_seconds.getEpochDay();
+    const day_seconds = epoch_seconds.getDaySeconds();
+    const year_day = epoch_day.calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
+
+    const hour = day_seconds.getHoursIntoDay();
+    const minute = day_seconds.getMinutesIntoHour();
+    const second = day_seconds.getSecondsIntoMinute();
+
+    return std.fmt.bufPrint(buffer, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
+        year_day.year,
+        month_day.month.numeric(),
+        month_day.day_index + 1,
+        hour,
+        minute,
+        second,
+    });
+}
+
 fn buildProcessStatus(self: *ProcessManager, proc: *Process, builder: *common.ResponseBuilder) !void {
     const status = proc.currentStatus();
     const status_symbol = switch (status) {
@@ -829,6 +887,83 @@ fn buildProcessStatus(self: *ProcessManager, proc: *Process, builder: *common.Re
     }
 
     try builder.appendFmt("      Tasks: {d} running, {d} starting, {d} stopping, {d} backoff, {d} fatal (total: {d})\n", .{ running_count, starting_count, stopping_count, backoff_count, fatal_count, proc.instances.len });
+
+    // Add per-instance details
+    try builder.append("\n   Instances:\n");
+    const now = std.time.milliTimestamp();
+    var time_buffer: [64]u8 = undefined;
+
+    for (proc.instances, 0..) |*inst, i| {
+        const pid_str = if (inst.pid) |pid| std.fmt.bufPrint(&time_buffer, "{d}", .{pid}) catch "?" else std.fmt.bufPrint(&time_buffer, "None", .{}) catch "None";
+        const inst_status_str = @tagName(inst.status);
+
+        // Calculate uptime or time since last event
+        var uptime_str: []const u8 = "-";
+        if (inst.status == .running and inst.pid != null) {
+            const uptime_ms = @as(u64, @intCast(now)) - inst.last_start_time;
+            const uptime_secs = uptime_ms / 1000;
+            uptime_str = formatDuration(uptime_secs, &time_buffer) catch "-";
+        }
+
+        // Show exit code if available
+        if (inst.exit_code) |exit_code| {
+            try builder.appendFmt("     [{d}] pid={s:<6}  {s:<9}  exit={d}  retries={d}/{d}\n", .{ i, pid_str, inst_status_str, exit_code, inst.retries, proc.config.conf.startretries });
+        } else if (inst.status == .running) {
+            try builder.appendFmt("     [{d}] pid={s:<6}  {s:<9}  uptime={s:<10}  retries={d}/{d}\n", .{ i, pid_str, inst_status_str, uptime_str, inst.retries, proc.config.conf.startretries });
+        } else {
+            try builder.appendFmt("     [{d}] pid={s:<6}  {s:<9}  retries={d}/{d}\n", .{ i, pid_str, inst_status_str, inst.retries, proc.config.conf.startretries });
+        }
+    }
+
+    // Add recent history section
+    try builder.append("\n   Recent History:\n");
+
+    // Collect all events from all instances
+    const max_events_to_show = 8;
+    var events_shown: usize = 0;
+
+    // We'll iterate through instances and their events in reverse chronological order
+    for (proc.instances, 0..) |*inst, inst_idx| {
+        if (inst.event_count == 0) continue;
+
+        // Calculate how many events this instance has
+        const events_in_buffer = @min(inst.event_count, inst.event_history.len);
+
+        // Start from most recent event
+        var events_checked: usize = 0;
+        while (events_checked < events_in_buffer and events_shown < max_events_to_show) : (events_checked += 1) {
+            // Calculate the index in reverse order (most recent first)
+            const idx = if (inst.event_history_index > events_checked)
+                inst.event_history_index - 1 - events_checked
+            else
+                inst.event_history.len - (events_checked - inst.event_history_index + 1);
+
+            if (inst.event_history[idx]) |event| {
+                const timestamp_str = formatTimestamp(event.timestamp, &time_buffer) catch "????-??-?? ??:??:??";
+                const event_name = @tagName(event.event_type);
+
+                if (event.exit_code) |exit_code| {
+                    if (event.exit_signal) |sig| {
+                        try builder.appendFmt("     {s}  [{d}] {s} (exit={d}, signal={d})\n", .{ timestamp_str, inst_idx, event_name, exit_code, sig });
+                    } else {
+                        try builder.appendFmt("     {s}  [{d}] {s} (exit={d})\n", .{ timestamp_str, inst_idx, event_name, exit_code });
+                    }
+                } else if (event.exit_signal) |sig| {
+                    try builder.appendFmt("     {s}  [{d}] {s} (signal={d})\n", .{ timestamp_str, inst_idx, event_name, sig });
+                } else if (event.pid) |pid| {
+                    try builder.appendFmt("     {s}  [{d}] {s} (pid={d})\n", .{ timestamp_str, inst_idx, event_name, pid });
+                } else {
+                    try builder.appendFmt("     {s}  [{d}] {s}\n", .{ timestamp_str, inst_idx, event_name });
+                }
+
+                events_shown += 1;
+            }
+        }
+    }
+
+    if (events_shown == 0) {
+        try builder.append("     (no events recorded)\n");
+    }
 
     try builder.append("\n");
 }
