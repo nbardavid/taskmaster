@@ -11,6 +11,7 @@ import (
 
 	"github.com/chzyer/readline"
 	"github.com/nbardavid/taskmaster/internals/command"
+	"github.com/nbardavid/taskmaster/internals/connection"
 	"github.com/nbardavid/taskmaster/internals/ui"
 )
 
@@ -23,23 +24,15 @@ type Queue struct {
 	head 	int
 }
 
-type Connection struct {
-	conn net.Conn
-	err error
-}
-
-//TODO: change any
-
 type Context struct {
-	connection Connection
+	connection connection.State
 	UI ui.Manager
 	Command command.State
 	pending Queue
 }
 
-
 func ExitingProperly (ctx *Context) StateFunc {
-	ctx.connection.conn.Close()
+	ctx.connection.Conn.Close()
 	ctx.UI.Rl.Close()
 	signal.Stop(sigs)
 	fmt.Printf("exit\n")
@@ -50,17 +43,17 @@ func SendCommandAndPayload (ctx *Context) StateFunc {
 	if len(ctx.Command.Payload) > 255 {
 		return SendToLongPayload
 	}
-	_, ctx.connection.err = ctx.connection.conn.Write([]byte{byte(ctx.Command.Code), byte(len(ctx.Command.Payload))})
-	if ctx.connection.err != nil {
+	_, ctx.connection.Err = ctx.connection.Conn.Write([]byte{byte(ctx.Command.Code), byte(len(ctx.Command.Payload))})
+	if ctx.connection.Err != nil {
 		return NeedsToDisconnect
 	}
-	_, ctx.connection.err = ctx.connection.conn.Write([]byte(ctx.Command.Payload))
+	_, ctx.connection.Err = ctx.connection.Conn.Write([]byte(ctx.Command.Payload))
 	return FetchInputs
 }
 
 func SendSimpleCommand (ctx *Context) StateFunc{
-	_, ctx.connection.err = ctx.connection.conn.Write([]byte{byte(ctx.Command.Code), 0})
-	if ctx.connection.err != nil {
+	_, ctx.connection.Err = ctx.connection.Conn.Write([]byte{byte(ctx.Command.Code), 0})
+	if ctx.connection.Err != nil {
 		return NeedsToDisconnect
 	}
 	return FetchInputs
@@ -118,8 +111,8 @@ func ConnectedToServer (ctx *Context) StateFunc {
 }
 
 func DisconnectedFromServer (ctx *Context) StateFunc {
-	ctx.connection.conn, ctx.connection.err = net.Dial("unix", socketPath)
-	if ctx.connection.conn != nil {
+	ctx.connection.Conn, ctx.connection.Err = net.Dial("unix", socketPath)
+	if ctx.connection.Conn != nil {
 		return EncounteredFatalError
 	} 
 	return ConnectedToServer

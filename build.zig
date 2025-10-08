@@ -58,43 +58,43 @@ pub fn build(b: *std.Build) void {
     const test_server_step = b.step("test_server", "Run unit tests");
     test_server_step.dependOn(&run_server_unit_test.step);
 
-    const client = b.addExecutable(.{
-        .name = "taskmaster-client",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/client/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "anyline", .module = anyline },
-                .{ .name = "common", .module = common.root_module },
-            },
-        }),
-    });
-    b.installArtifact(client);
-
-    const run_client_cmd = b.addRunArtifact(client);
-
-    run_client_cmd.step.dependOn(b.getInstallStep());
-
-    if (b.args) |args| {
-        run_client_cmd.addArgs(args);
-    }
-
-    const run_client_step = b.step("run_client", "Run the app");
-    run_client_step.dependOn(&run_client_cmd.step);
-
-    const client_unit_test = b.addTest(.{
-        .root_module = client.root_module,
-    });
-
-    const run_client_unit_test = b.addRunArtifact(client_unit_test);
-
-    const test_client_step = b.step("test_client", "Run unit tests");
-    test_client_step.dependOn(&run_client_unit_test.step);
-
-    const check_step = b.step("check", "zls helper");
-    check_step.dependOn(&server.step);
-    check_step.dependOn(&client.step);
+    // const client = b.addExecutable(.{
+    //     .name = "taskmaster-client",
+    //     .root_module = b.createModule(.{
+    //         .root_source_file = b.path("src/client/main.zig"),
+    //         .target = target,
+    //         .optimize = optimize,
+    //         .imports = &.{
+    //             .{ .name = "anyline", .module = anyline },
+    //             .{ .name = "common", .module = common.root_module },
+    //         },
+    //     }),
+    // });
+    // b.installArtifact(client);
+    //
+    // const run_client_cmd = b.addRunArtifact(client);
+    //
+    // run_client_cmd.step.dependOn(b.getInstallStep());
+    //
+    // if (b.args) |args| {
+    //     run_client_cmd.addArgs(args);
+    // }
+    //
+    // const run_client_step = b.step("run_client", "Run the app");
+    // run_client_step.dependOn(&run_client_cmd.step);
+    //
+    // const client_unit_test = b.addTest(.{
+    //     .root_module = client.root_module,
+    // });
+    //
+    // const run_client_unit_test = b.addRunArtifact(client_unit_test);
+    //
+    // const test_client_step = b.step("test_client", "Run unit tests");
+    // test_client_step.dependOn(&run_client_unit_test.step);
+    //
+    // const check_step = b.step("check", "zls helper");
+    // check_step.dependOn(&server.step);
+    // check_step.dependOn(&client.step);
 
     // Test programs for evaluation
     const test_programs = [_][]const u8{
