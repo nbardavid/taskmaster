@@ -15,6 +15,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rootModel := ui.InitRootscreens(cancel)
+	// p := tea.NewProgram(&rootModel)
 	p := tea.NewProgram(&rootModel, tea.WithAltScreen())
 	go worker.WorkerStart(ctx, p);
 	// for {

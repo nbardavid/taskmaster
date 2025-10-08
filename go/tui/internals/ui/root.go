@@ -6,7 +6,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	message "github.com/nbardavid/taskmaster-tui/internals/ui/msg"
 	"github.com/nbardavid/taskmaster-tui/internals/ui/screens"
-	// "github.com/nbardavid/taskmaster-tui/internals/worker"
 )
 
 type Screen int
@@ -61,8 +60,15 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stopWorker()
 			return m, tea.Quit
 		}
+	case screens.ProgramChosenMsg:
+		m.screen = ScreenDetail
+		return m, func () tea.Msg {
+			return screens.ProgramDetails{ Name: msg.Name, Program: msg.Program}
+		}
+	case message.GoBackToSelection:
+		m.screen = ScreenChooseProgram
+		return m, nil
 	}
-
 
 	switch m.screen {
 	case ScreenDisconnect:
