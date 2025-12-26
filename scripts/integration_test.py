@@ -77,7 +77,8 @@ def main():
         return run_client(args.client, base_args + ["status"])
 
     def status_program(name):
-        return run_client(args.client, base_args + ["program", name, "status"])
+        response = run_client(args.client, base_args + ["program", name, "status"])
+        return response.get("program", response)
 
     def start_program(name):
         return run_client(args.client, base_args + ["program", name, "start"])
@@ -104,7 +105,7 @@ def main():
     for name in programs:
         payload = status_program(name)
         show(f"{name} status", payload)
-        for key in ("name", "running", "alive", "total", "uptime_s", "fatal_count"):
+        for key in ("name", "running", "alive", "total", "uptime_seconds", "fatal_count"):
             assert_true(key in payload, f"{name} status has {key}", failures)
 
     banner("Feature: numprocs")
