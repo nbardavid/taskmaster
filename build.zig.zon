@@ -1,13 +1,9 @@
 .{
-    .name = .taskmaster,
+    .name = .taskmaster_v2,
     .version = "0.0.0",
-    .fingerprint = 0x6095546a8b64fc16,
-    .minimum_zig_version = "0.15.1",
+    .fingerprint = 0x32e18e6240e33e11,
+    .minimum_zig_version = "0.16.0-dev.1657+985a3565c",
     .dependencies = .{
-        .anyline = .{
-            .url = "https://github.com/c-shinkle/anyline/archive/refs/tags/v0.1.0.tar.gz",
-            .hash = "anyline-0.1.0-PM_c7xRXAAB5pm4i564lgLfw7Li8gKNoCar9o24Y_LBK",
-        },
     },
     .paths = .{
         "build.zig",
